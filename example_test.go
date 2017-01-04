@@ -14,14 +14,14 @@ func ExampleF_xorbits() {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"sigmoid", 16}
 	output := NeuLayerConfig{"sigmoid", 1}
-	tunables := NeuTunables{alpha: 0.1, momentum: 0.3, batchsize: BatchSGD, costfunction: CostLinear, gdalgname: RMSprop}
+	tunables := NeuTunables{alpha: 0.4, momentum: 0.6, batchsize: BatchSGD, costfunction: CostLinear, gdalgname: RMSprop}
 	nn := NewNeuNetwork(input, hidden, 2, output, tunables)
-
+	maxint := int32(0xff)
 	normalize := func(vec []float64) {
-		divElemVector(vec, float64(math.MaxInt8))
+		divElemVector(vec, float64(maxint))
 	}
 	denormalize := func(vec []float64) {
-		mulElemVector(vec, float64(math.MaxInt8))
+		mulElemVector(vec, float64(maxint))
 	}
 	nn.callbacks = NeuCallbacks{normalize, normalize, denormalize}
 
@@ -33,40 +33,45 @@ func ExampleF_xorbits() {
 		return y
 	}
 	Xs := newMatrix(100, 2)
-	for j := 0; j < 1000; j++ {
+	for j := 0; j < 10000; j++ {
 		// fill with random bits 0 to 0x1111111
 		for i := 0; i < len(Xs); i++ {
-			Xs[i][0] = float64(rand.Int31n(math.MaxInt8))
-			Xs[i][1] = float64(rand.Int31n(math.MaxInt8))
+			Xs[i][0] = float64(rand.Int31n(maxint))
+			Xs[i][1] = float64(rand.Int31n(maxint))
 		}
 		// run each sample 2 times, use callback to compute true result for a given input
 		for k := 0; k < 2; k++ {
 			nn.Train(Xs, xorbits)
 		}
+		// debug
+		if nn.tunables.tracking > 0 && j%1000 == 0 {
+			nn.printTracks(j)
+		}
 	}
 	// test and print the results (expected output below)
-	var loss float64
+	var err, loss float64
 	for i := 0; i < 4; i++ {
 		var xvec []float64 = []float64{0, 0}
-		xvec[0] = float64(rand.Int31n(math.MaxInt8))
-		xvec[1] = float64(rand.Int31n(math.MaxInt8))
+		xvec[0] = float64(rand.Int31n(maxint))
+		xvec[1] = float64(rand.Int31n(maxint))
 		y1 := nn.Predict(xvec)
 		y2 := xorbits(xvec)
+		err += nn.AbsError(y2)
 		loss += nn.CostLinear(y2)
 
 		a := int(xvec[0])
 		b := int(xvec[1])
 		c := int(y1[0])
 		d := int(y2[0])
-		fmt.Printf("%07b XOR %07b -> %07b : %07b\n", a, b, c, d)
+		fmt.Printf("%08b ^ %08b -> %08b : %08b\n", a, b, c, d)
 	}
-	fmt.Printf("loss %.5f\n", loss/4.0)
+	fmt.Printf("error %d, loss %.5f\n", int(err)/4, loss/4)
 	// Output:
-	// 0000011 XOR 1011010 -> 1010101 : 1011001
-	// 0010001 XOR 0001101 -> 0001001 : 0011100
-	// 0111011 XOR 1011010 -> 1011011 : 1100001
-	// 1001010 XOR 1110000 -> 0111110 : 0111010
-	// loss 0.00321
+	// 01110101 ^ 10001001 -> 11111110 : 11111100
+	// 01000010 ^ 01011100 -> 00011110 : 00011110
+	// 10101111 ^ 01110101 -> 11011110 : 11011010
+	// 10110011 ^ 11101100 -> 00110101 : 01011111
+	// error 12, loss 0.00331
 }
 
 func ExampleF_sumsquares() {

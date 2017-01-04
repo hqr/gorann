@@ -164,3 +164,19 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
 	fmt.Println("pre-train cost:", avgcost)
 	fmt.Println("pre-train conf:", nn.tunables)
 }
+
+// debug
+func (nn *NeuNetwork) printTracks(iter int) {
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		var w, g string
+		for j := 0; j < len(layer.weitrack); j++ {
+			w += fmt.Sprintf(" %.3f", layer.weitrack[j])
+		}
+		for j := 0; j < len(layer.gratrack); j++ {
+			g += fmt.Sprintf(" %.3f", layer.gratrack[j])
+		}
+		fmt.Printf("%6d: [%2d L2(w changes)]%s\n", iter, layer.idx, w)
+		fmt.Printf("%6d: [%2d L2(gradients)]%s\n", iter, layer.idx, g)
+	}
+}

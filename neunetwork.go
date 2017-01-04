@@ -11,8 +11,9 @@ type NeuNetwork struct {
 	tunables  NeuTunables
 	callbacks NeuCallbacks
 	//
-	layers  []*NeuLayer
-	lastidx int
+	layers     []*NeuLayer
+	lastidx    int
+	nbackprops int
 }
 
 type NeuLayer struct {
@@ -30,6 +31,10 @@ type NeuLayer struct {
 	pregradient [][]float64 // previous value of the gradient, applied with momentum
 	rmsgradient [][]float64 // average or moving average of the RMS(gradient)
 	rmswupdates [][]float64 // moving average of the RMS(weight update) - Adadelta only
+	// tracking
+	weitrack []float64 // weight changes expressed as euclidean distances: sum(distance(neuron-curr, neuron-prev)))
+	gratrack []float64 // past and current euclidean-norm(gradients)
+	costrack []float64 // last so many cost (function) values
 }
 
 // c-tor
@@ -60,6 +65,12 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 		layer := nn.layers[idx]
 		layer.init(nn)
 	}
+	if nn.tunables.batchsize < BatchSGD {
+		nn.tunables.batchsize = BatchSGD
+	}
+	// other defaults
+	// nn.tunables.tracking = TrackWeightChanges | TrackGradientChanges
+	// nn.tunables.gdalgscope = GDoptimizationScopeAll
 	return nn
 }
 
@@ -99,6 +110,15 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 	// if nn.tunables.gdalgname == Adadelta {
 	layer.rmswupdates = newMatrix(layer.size, layer.next.size)
 	// }
+	// if nn.tunables.tracking & TrackWeightChanges > 0 {
+	layer.weitrack = newVector(10)
+	// }
+	// if nn.tunables.tracking & TrackGradientChanges > 0 {
+	layer.gratrack = newVector(10)
+	// }
+	// if nn.tunables.tracking & TrackCostChanges > 0 {
+	layer.costrack = newVector(10)
+	// }
 }
 
 func (layer *NeuLayer) isHidden() bool {
@@ -133,6 +153,7 @@ func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
 
 func (nn *NeuNetwork) backprop(yvec []float64) {
 	assert(len(yvec) == nn.coutput.size)
+	nn.nbackprops++
 	//
 	// compute deltas moving from the last layer back to the first
 	//
@@ -182,9 +203,23 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 			divElemMatrix(layer.gradient, float64(batchsize))
 		}
 	}
+	var dotrackg, dotrackw bool
+	if nn.nbackprops%100 == 0 {
+		dotrackw = nn.tunables.tracking&TrackWeightChanges > 0
+		dotrackg = nn.tunables.tracking&TrackGradientChanges > 0
+	}
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		next := layer.next
+		var prew [][]float64
+		if dotrackw {
+			prew = cloneMatrix(layer.weights)
+		}
+		if dotrackg {
+			edist0 := distanceRows(layer.gradient, nil)
+			shiftVector(layer.gratrack)
+			pushVector(layer.gratrack, edist0)
+		}
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
 				if l == nn.lastidx-1 || nn.tunables.gdalgscope&GDoptimizationScopeAll > 0 {
@@ -194,14 +229,22 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 				}
 			}
 		}
+		if dotrackw {
+			edist := distanceRows(prew, layer.weights)
+			shiftVector(layer.weitrack)
+			pushVector(layer.weitrack, edist)
+		}
 	}
 }
 
 func (layer *NeuLayer) weightij(i int, j int) {
 	nn := layer.nn
 	alpha := nn.tunables.alpha
-	layer.weights[i][j] = layer.weights[i][j] + alpha*layer.gradient[i][j]
-	layer.weights[i][j] += nn.tunables.momentum * layer.pregradient[i][j]
+	weightij := layer.weights[i][j]
+	weightij = weightij + alpha*layer.gradient[i][j]
+	weightij += nn.tunables.momentum * layer.pregradient[i][j]
+
+	layer.weights[i][j] = weightij
 	layer.pregradient[i][j] = layer.gradient[i][j]
 	layer.gradient[i][j] = 0
 }
@@ -239,26 +282,33 @@ func (layer *NeuLayer) weightij_gdalg(i int, j int) {
 			alpha /= (math.Sqrt(layer.rmsgradient[i][j] + eps))
 		}
 	}
+	weightij := layer.weights[i][j]
 	// adjust the weight
 	if layer.isHidden() && i < layer.config.size && lambda > 0 && nn.tunables.regularization > 0 {
 		if nn.tunables.regularization&RegularizeL2 > 0 {
-			layer.weights[i][j] = layer.weights[i][j]*(1-alpha*lambda) + alpha*layer.gradient[i][j]
+			weightij = weightij*(1-alpha*lambda) + alpha*layer.gradient[i][j]
 		} else if nn.tunables.regularization&RegularizeL1 > 0 {
-			if layer.weights[i][j] < 0 {
-				layer.weights[i][j] += alpha * lambda
-			} else if layer.weights[i][j] > 0 {
-				layer.weights[i][j] -= alpha * lambda
+			if weightij < 0 {
+				weightij += alpha * lambda
+			} else if weightij > 0 {
+				weightij -= alpha * lambda
 			}
-			layer.weights[i][j] += alpha * layer.gradient[i][j]
+			weightij += alpha * layer.gradient[i][j]
 		}
 	} else {
-		layer.weights[i][j] = layer.weights[i][j] + alpha*layer.gradient[i][j]
-		layer.weights[i][j] += nn.tunables.momentum * layer.pregradient[i][j]
+		weightij = weightij + alpha*layer.gradient[i][j]
+		weightij += nn.tunables.momentum * layer.pregradient[i][j]
 	}
+
+	layer.weights[i][j] = weightij
 	layer.pregradient[i][j] = layer.gradient[i][j]
 	layer.gradient[i][j] = 0
 }
 
+//
+// cost and loss helper functions; in all 3 the yvec is true value
+// assumption/requirement therefore: called after the corresponding feed-forward step
+//
 func (nn *NeuNetwork) CostLinear(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
 	var ynorm []float64 = yvec
@@ -284,9 +334,25 @@ func (nn *NeuNetwork) CostLogistic(yvec []float64) float64 {
 	}
 	var err float64
 	outputL := nn.layers[nn.lastidx]
-	for i := 0; i < len(yvec); i++ {
+	for i := 0; i < len(ynorm); i++ {
 		costi := ynorm[i]*math.Log(outputL.avec[i]) + (1-ynorm[i])*math.Log(1-outputL.avec[i])
 		err += costi
 	}
 	return -err / 2
+}
+
+// denormalized sum ||y(i) - h(i)||
+func (nn *NeuNetwork) AbsError(yvec []float64) float64 {
+	assert(len(yvec) == nn.coutput.size)
+	outputL := nn.layers[nn.lastidx]
+	var ydenorm []float64 = outputL.avec
+	if nn.callbacks.denormcbY != nil {
+		ydenorm = cloneVector(outputL.avec)
+		nn.callbacks.denormcbY(ydenorm)
+	}
+	var err float64
+	for i := 0; i < len(ydenorm); i++ {
+		err += math.Abs(ydenorm[i] - yvec[i])
+	}
+	return err
 }

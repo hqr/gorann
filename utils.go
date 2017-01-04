@@ -4,6 +4,7 @@ import (
 	"fmt"
 	// "github.com/gonum/matrix/mat64" // pretty print only
 	"log"
+	"math"
 	"math/rand"
 	"reflect"
 )
@@ -101,6 +102,52 @@ func divElemMatrix(mat [][]float64, d float64) {
 	}
 }
 
+func distanceRows(matA [][]float64, matB [][]float64) float64 {
+	rows := len(matA)
+	edist := 0.0
+	if matB == nil {
+		for r := 0; r < rows; r++ {
+			edist += distanceVector(matA[r], nil)
+		}
+		return edist
+	}
+	assert(rows == len(matB))
+	cols := len(matA[0])
+	for r := 0; r < rows; r++ {
+		assert(cols == len(matB[r]))
+		edist += distanceVector(matA[r], matB[r])
+	}
+	return edist
+}
+
+func distanceColumns(matA [][]float64, matB [][]float64) float64 {
+	rows := len(matB)
+	assert(rows == len(matA))
+	cols := len(matB[0])
+	edist := 0.0
+	for c := 0; c < cols; c++ {
+		d := 0.0
+		for r := 0; r < rows; r++ {
+			assert(cols == len(matA[r]))
+			d += math.Pow(matA[r][c]-matB[r][c], 2)
+		}
+		edist += math.Sqrt(d)
+	}
+	return edist
+}
+
+func distanceVector(avec []float64, bvec []float64) float64 {
+	edist := 0.0
+	for c := 0; c < len(avec); c++ {
+		if bvec == nil {
+			edist += math.Pow(avec[c], 2)
+		} else {
+			edist += math.Pow(avec[c]-bvec[c], 2)
+		}
+	}
+	return math.Sqrt(edist)
+}
+
 func divElemVector(vec []float64, d float64) {
 	for c := 0; c < len(vec); c++ {
 		vec[c] /= d
@@ -152,6 +199,14 @@ func cloneVector(src []float64) []float64 {
 	var dst []float64 = make([]float64, len(src))
 	copy(dst, src)
 	return dst
+}
+
+func shiftVector(vec []float64) {
+	copy(vec, vec[1:])
+}
+
+func pushVector(vec []float64, x float64) {
+	vec[len(vec)-1] = x
 }
 
 func copyStruct(dst interface{}, src interface{}) {

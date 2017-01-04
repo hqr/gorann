@@ -23,7 +23,8 @@ const (
 	RegularizeL1 = 1 << 0
 	RegularizeL2 = 1 << 1
 	//
-	// gradient descent optimization algorithms (http://sebastianruder.com/optimizing-gradient-descent)
+	// gradient descent non-linear optimization algorithms (e.g., http://sebastianruder.com/optimizing-gradient-descent)
+	// TODO: Nesterov, ADAM, BFGS, and LBFGS
 	//
 	Adagrad                = "Adagrad"
 	Adadelta               = "Adadelta"
@@ -39,6 +40,12 @@ const (
 	//
 	Epsilon = 0.00001
 	Gamma   = 0.9
+	//
+	// runtime tracking (weight, gradient, etc.) changes - can be used to control the behavior
+	//
+	TrackWeightChanges   = 1 << 0
+	TrackCostChanges     = 1 << 1
+	TrackGradientChanges = 1 << 2
 )
 
 // neural network tunables
@@ -50,4 +57,5 @@ type NeuTunables struct {
 	gdalgscope     int     // whether to apply optimization algorithm to all layers or just the last one
 	batchsize      int     // gradient descent: BatchSGD | BatchTrainingSet | minibatch
 	regularization int
+	tracking       int
 }
