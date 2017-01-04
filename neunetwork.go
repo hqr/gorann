@@ -28,8 +28,8 @@ type NeuLayer struct {
 	weights     [][]float64
 	gradient    [][]float64
 	pregradient [][]float64 // previous value of the gradient, applied with momentum
-	rmsgradient [][]float64 // running mean average of the squared gradient (RMSprop and Adagrad)
-	rmswupdates [][]float64 // running mean average of the squared weight update (Adadelta only)
+	rmsgradient [][]float64 // average or moving average of the RMS(gradient)
+	rmswupdates [][]float64 // moving average of the RMS(weight update) - Adadelta only
 }
 
 // c-tor
