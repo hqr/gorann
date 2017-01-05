@@ -31,6 +31,7 @@ type NeuLayer struct {
 	pregradient [][]float64 // previous value of the gradient, applied with momentum
 	rmsgradient [][]float64 // average or moving average of the RMS(gradient)
 	rmswupdates [][]float64 // moving average of the RMS(weight update) - Adadelta only
+	avegradient [][]float64 // average or moving average of the gradient - ADAM only
 	// tracking
 	weitrack []float64 // weight changes expressed as euclidean distances: sum(distance(neuron-curr, neuron-prev)))
 	gratrack []float64 // past and current euclidean-norm(gradients)
@@ -43,7 +44,7 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 
 	nn.lastidx = numhidden + 1
 	nn.layers = make([]*NeuLayer, numhidden+2)
-
+	// construct layers
 	var prev *NeuLayer
 	for idx := 0; idx <= nn.lastidx; idx++ {
 		var layer *NeuLayer
@@ -68,30 +69,38 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 	if nn.tunables.batchsize < BatchSGD {
 		nn.tunables.batchsize = BatchSGD
 	}
-	// other defaults
+	// algorithm-specific initialization
+	nn.initgdalg(nn.tunables.gdalgname)
+
+	// other settings via TBD CLI
 	// nn.tunables.tracking = TrackWeightChanges | TrackGradientChanges
 	// nn.tunables.gdalgscope = GDoptimizationScopeAll
 	return nn
 }
 
-func (nn *NeuNetwork) copyWeights(from *NeuNetwork, reset bool) {
+func (nn *NeuNetwork) copyNetwork(from *NeuNetwork, weightsonly bool) {
 	assert(nn.lastidx == from.lastidx)
+	if !weightsonly {
+		copyStruct(nn.tunables, from.tunables)
+		nn.initgdalg(nn.tunables.gdalgname)
+	}
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		layer_from := from.layers[l]
 		assert(layer.config.size == layer_from.config.size)
 
 		copyMatrix(layer.weights, layer_from.weights)
-
-		if reset {
-			fillVector(layer.avec, 1.0)
-			fillVector(layer.zvec, 1.0)
-			fillVector(layer.deltas, 0.0)
-			zeroMatrix(layer.gradient)
-			zeroMatrix(layer.pregradient)
-			zeroMatrix(layer.rmsgradient)
-			zeroMatrix(layer.rmswupdates)
+		if weightsonly {
+			continue
 		}
+		fillVector(layer.avec, 1.0)
+		fillVector(layer.zvec, 1.0)
+		fillVector(layer.deltas, 0.0)
+		zeroMatrix(layer.gradient)
+		zeroMatrix(layer.pregradient)
+		zeroMatrix(layer.rmsgradient)
+
+		layer.initgdalg(nn.tunables.gdalgname)
 	}
 }
 
@@ -107,18 +116,38 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 	layer.gradient = newMatrix(layer.size, layer.next.size)
 	layer.pregradient = newMatrix(layer.size, layer.next.size)
 	layer.rmsgradient = newMatrix(layer.size, layer.next.size)
-	// if nn.tunables.gdalgname == Adadelta {
-	layer.rmswupdates = newMatrix(layer.size, layer.next.size)
-	// }
-	// if nn.tunables.tracking & TrackWeightChanges > 0 {
-	layer.weitrack = newVector(10)
-	// }
-	// if nn.tunables.tracking & TrackGradientChanges > 0 {
-	layer.gratrack = newVector(10)
-	// }
-	// if nn.tunables.tracking & TrackCostChanges > 0 {
-	layer.costrack = newVector(10)
-	// }
+
+	layer.initgdalg(nn.tunables.gdalgname)
+	layer.weitrack = newVector(10) // nn.tunables.tracking & TrackWeightChanges
+	layer.gratrack = newVector(10) // nn.tunables.tracking & TrackGradientChanges
+	layer.costrack = newVector(10) // nn.tunables.tracking & TrackCostChanges
+}
+
+func (nn *NeuNetwork) initgdalg(gdalgname string) {
+	if gdalgname == ADAM {
+		nn.tunables.gdalgalpha = ADAM_alpha
+		nn.tunables.beta1 = ADAM_beta1
+		nn.tunables.beta2 = ADAM_beta2
+		nn.tunables.beta1_t = ADAM_beta1_t
+		nn.tunables.beta2_t = ADAM_beta2_t
+		nn.tunables.eps = ADAM_eps
+	} else if gdalgname == Adagrad {
+		nn.tunables.gdalgalpha = nn.tunables.alpha
+		nn.tunables.eps = GDALG_eps
+	} else if gdalgname == Adadelta || gdalgname == RMSprop {
+		nn.tunables.gdalgalpha = nn.tunables.alpha
+		nn.tunables.eps = GDALG_eps
+		nn.tunables.gamma = GDALG_gamma
+	}
+}
+
+func (layer *NeuLayer) initgdalg(gdalgname string) {
+	if gdalgname == ADAM {
+		layer.avegradient = newMatrix(layer.size, layer.next.size)
+	}
+	if gdalgname == Adadelta {
+		layer.rmswupdates = newMatrix(layer.size, layer.next.size)
+	}
 }
 
 func (layer *NeuLayer) isHidden() bool {
@@ -151,6 +180,7 @@ func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
 	}
 }
 
+// see for instance https://web.stanford.edu/class/cs294a/sparseAutoencoder_2011new.pdf
 func (nn *NeuNetwork) backprop(yvec []float64) {
 	assert(len(yvec) == nn.coutput.size)
 	nn.nbackprops++
@@ -161,9 +191,9 @@ func (nn *NeuNetwork) backprop(yvec []float64) {
 	actF := activations[outputL.config.actfname]
 	for i := 0; i < nn.coutput.size; i++ {
 		if actF.dfy != nil {
-			outputL.deltas[i] = actF.dfy(outputL.avec[i]) * (yvec[i] - outputL.avec[i])
+			outputL.deltas[i] = actF.dfy(outputL.avec[i]) * (outputL.avec[i] - yvec[i])
 		} else {
-			outputL.deltas[i] = actF.dfx(outputL.zvec[i]) * (yvec[i] - outputL.avec[i])
+			outputL.deltas[i] = actF.dfx(outputL.zvec[i]) * (outputL.avec[i] - yvec[i])
 		}
 	}
 	for l := nn.lastidx - 1; l > 0; l-- {
@@ -208,6 +238,10 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 		dotrackw = nn.tunables.tracking&TrackWeightChanges > 0
 		dotrackg = nn.tunables.tracking&TrackGradientChanges > 0
 	}
+	if nn.tunables.gdalgname == ADAM {
+		nn.tunables.beta1_t *= nn.tunables.beta1
+		nn.tunables.beta2_t *= nn.tunables.beta2
+	}
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		next := layer.next
@@ -216,93 +250,123 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 			prew = cloneMatrix(layer.weights)
 		}
 		if dotrackg {
-			edist0 := distanceRows(layer.gradient, nil)
+			edist0 := normL2Matrix(layer.gradient, nil)
 			shiftVector(layer.gratrack)
 			pushVector(layer.gratrack, edist0)
 		}
+		// move the weights in the direction opposite to the corresponding gradient vectors
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
+				// l-th layer, i-th neuron, j-th synapse
+				var weightij float64
 				if l == nn.lastidx-1 || nn.tunables.gdalgscope&GDoptimizationScopeAll > 0 {
-					layer.weightij_gdalg(i, j) // i-th neuron, j-th synapse
+					switch nn.tunables.gdalgname {
+					case Adagrad:
+						weightij = layer.weightij_Adagrad(i, j)
+					case Adadelta:
+						weightij = layer.weightij_Adadelta(i, j)
+					case RMSprop:
+						weightij = layer.weightij_RMSprop(i, j)
+					case ADAM:
+						weightij = layer.weightij_ADAM(i, j)
+					}
 				} else {
-					layer.weightij(i, j)
+					weightij = layer.weightij(i, j)
 				}
+				layer.weights[i][j] = weightij
+				layer.pregradient[i][j] = layer.gradient[i][j]
+				layer.gradient[i][j] = 0
 			}
 		}
 		if dotrackw {
-			edist := distanceRows(prew, layer.weights)
+			edist := normL2Matrix(prew, layer.weights)
 			shiftVector(layer.weitrack)
 			pushVector(layer.weitrack, edist)
 		}
 	}
 }
 
-func (layer *NeuLayer) weightij(i int, j int) {
+func (layer *NeuLayer) weightij(i int, j int) float64 {
 	nn := layer.nn
 	alpha := nn.tunables.alpha
 	weightij := layer.weights[i][j]
-	weightij = weightij + alpha*layer.gradient[i][j]
-	weightij += nn.tunables.momentum * layer.pregradient[i][j]
-
-	layer.weights[i][j] = weightij
-	layer.pregradient[i][j] = layer.gradient[i][j]
-	layer.gradient[i][j] = 0
+	weightij = weightij - alpha*layer.gradient[i][j]
+	weightij -= nn.tunables.momentum * layer.pregradient[i][j]
+	return weightij
 }
 
-func (layer *NeuLayer) weightij_gdalg(i int, j int) {
+func (layer *NeuLayer) weightij_Adagrad(i int, j int) float64 {
 	nn := layer.nn
-	alpha := nn.tunables.alpha
-	gamma, g1, eps := Gamma, 1-Gamma, Epsilon // hyperparameters
-	lambda := Lambda                          // regularization rate aka weight decay
-
-	switch nn.tunables.gdalgname {
-	case Adagrad:
-		if layer.rmsgradient[i][j] == 0 {
-			layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
-		} else {
-			alpha /= (math.Sqrt(layer.rmsgradient[i][j] + eps))
-			layer.rmsgradient[i][j] += math.Pow(layer.gradient[i][j], 2)
-		}
-	case Adadelta:
-		if layer.rmsgradient[i][j] == 0 {
-			layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
-			deltaij := alpha * layer.gradient[i][j]
-			layer.rmswupdates[i][j] = math.Pow(deltaij, 2)
-		} else {
-			layer.rmsgradient[i][j] = gamma*layer.rmsgradient[i][j] + g1*math.Pow(layer.gradient[i][j], 2)
-			alpha = math.Sqrt(layer.rmswupdates[i][j]+eps) / (math.Sqrt(layer.rmsgradient[i][j] + eps))
-			deltaij := alpha * layer.gradient[i][j]
-			layer.rmswupdates[i][j] = gamma*layer.rmswupdates[i][j] + g1*math.Pow(deltaij, 2)
-		}
-	case RMSprop:
-		if layer.rmsgradient[i][j] == 0 {
-			layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
-		} else {
-			layer.rmsgradient[i][j] = gamma*layer.rmsgradient[i][j] + g1*math.Pow(layer.gradient[i][j], 2)
-			alpha /= (math.Sqrt(layer.rmsgradient[i][j] + eps))
-		}
-	}
+	alpha := nn.tunables.gdalgalpha
 	weightij := layer.weights[i][j]
-	// adjust the weight
-	if layer.isHidden() && i < layer.config.size && lambda > 0 && nn.tunables.regularization > 0 {
-		if nn.tunables.regularization&RegularizeL2 > 0 {
-			weightij = weightij*(1-alpha*lambda) + alpha*layer.gradient[i][j]
-		} else if nn.tunables.regularization&RegularizeL1 > 0 {
-			if weightij < 0 {
-				weightij += alpha * lambda
-			} else if weightij > 0 {
-				weightij -= alpha * lambda
-			}
-			weightij += alpha * layer.gradient[i][j]
-		}
+	eps := nn.tunables.eps
+
+	if layer.rmsgradient[i][j] == 0 {
+		layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
 	} else {
-		weightij = weightij + alpha*layer.gradient[i][j]
-		weightij += nn.tunables.momentum * layer.pregradient[i][j]
+		alpha /= (math.Sqrt(layer.rmsgradient[i][j] + eps))
+		layer.rmsgradient[i][j] += math.Pow(layer.gradient[i][j], 2)
 	}
 
-	layer.weights[i][j] = weightij
-	layer.pregradient[i][j] = layer.gradient[i][j]
-	layer.gradient[i][j] = 0
+	weightij = weightij - alpha*layer.gradient[i][j]
+	weightij -= nn.tunables.momentum * layer.pregradient[i][j]
+	return weightij
+}
+
+func (layer *NeuLayer) weightij_Adadelta(i int, j int) float64 {
+	nn := layer.nn
+	alpha := nn.tunables.gdalgalpha
+	weightij := layer.weights[i][j]
+	gamma, g1, eps := nn.tunables.gamma, 1-nn.tunables.gamma, nn.tunables.eps
+
+	if layer.rmsgradient[i][j] == 0 {
+		layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
+		deltaij := alpha * layer.gradient[i][j]
+		layer.rmswupdates[i][j] = math.Pow(deltaij, 2)
+	} else {
+		layer.rmsgradient[i][j] = gamma*layer.rmsgradient[i][j] + g1*math.Pow(layer.gradient[i][j], 2)
+		alpha = math.Sqrt(layer.rmswupdates[i][j]+eps) / (math.Sqrt(layer.rmsgradient[i][j] + eps))
+		deltaij := alpha * layer.gradient[i][j]
+		layer.rmswupdates[i][j] = gamma*layer.rmswupdates[i][j] + g1*math.Pow(deltaij, 2)
+	}
+
+	weightij = weightij - alpha*layer.gradient[i][j]
+	weightij -= nn.tunables.momentum * layer.pregradient[i][j]
+	return weightij
+}
+
+func (layer *NeuLayer) weightij_RMSprop(i int, j int) float64 {
+	nn := layer.nn
+	alpha := nn.tunables.gdalgalpha
+	weightij := layer.weights[i][j]
+	gamma, g1, eps := nn.tunables.gamma, 1-nn.tunables.gamma, nn.tunables.eps
+
+	if layer.rmsgradient[i][j] == 0 {
+		layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
+	} else {
+		layer.rmsgradient[i][j] = gamma*layer.rmsgradient[i][j] + g1*math.Pow(layer.gradient[i][j], 2)
+		alpha /= (math.Sqrt(layer.rmsgradient[i][j] + eps))
+	}
+	weightij = weightij - alpha*layer.gradient[i][j]
+	weightij -= nn.tunables.momentum * layer.pregradient[i][j]
+	return weightij
+}
+
+func (layer *NeuLayer) weightij_ADAM(i int, j int) float64 {
+	nn := layer.nn
+	alpha := nn.tunables.gdalgalpha
+	weightij := layer.weights[i][j]
+
+	if layer.rmsgradient[i][j] == 0 {
+		layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
+		layer.avegradient[i][j] = layer.gradient[i][j]
+	} else {
+		layer.avegradient[i][j] = nn.tunables.beta1*layer.avegradient[i][j] + (1-nn.tunables.beta1)*layer.gradient[i][j]
+		layer.rmsgradient[i][j] = nn.tunables.beta2*layer.rmsgradient[i][j] + (1-nn.tunables.beta2)*math.Pow(layer.gradient[i][j], 2)
+		alpha *= math.Sqrt(1-nn.tunables.beta2_t) / (1 - nn.tunables.beta1_t)
+		weightij = weightij - alpha*layer.avegradient[i][j]/(math.Sqrt(layer.rmsgradient[i][j])+nn.tunables.eps)
+	}
+	return weightij
 }
 
 //
@@ -316,13 +380,8 @@ func (nn *NeuNetwork) CostLinear(yvec []float64) float64 {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.normcbY(ynorm)
 	}
-	var err float64
 	outputL := nn.layers[nn.lastidx]
-	for i := 0; i < len(ynorm); i++ {
-		delta := ynorm[i] - outputL.avec[i]
-		err += delta * delta
-	}
-	return err / 2
+	return normL2VectorSquared(ynorm, outputL.avec) / 2
 }
 
 func (nn *NeuNetwork) CostLogistic(yvec []float64) float64 {
@@ -341,7 +400,8 @@ func (nn *NeuNetwork) CostLogistic(yvec []float64) float64 {
 	return -err / 2
 }
 
-// denormalized sum ||y(i) - h(i)||
+// unlike the conventional Cost functions above, this one works on denormalized result vectors
+// note also that it returns L1 norm
 func (nn *NeuNetwork) AbsError(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
 	outputL := nn.layers[nn.lastidx]
@@ -350,9 +410,5 @@ func (nn *NeuNetwork) AbsError(yvec []float64) float64 {
 		ydenorm = cloneVector(outputL.avec)
 		nn.callbacks.denormcbY(ydenorm)
 	}
-	var err float64
-	for i := 0; i < len(ydenorm); i++ {
-		err += math.Abs(ydenorm[i] - yvec[i])
-	}
-	return err
+	return normL1Vector(ydenorm, yvec)
 }

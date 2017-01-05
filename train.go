@@ -69,10 +69,10 @@ func (nn *NeuNetwork) Train(Xs [][]float64, arg interface{}) {
 func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
 	nn_orig := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables)
 	nn_optm := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables)
-	nn_orig.copyWeights(nn, false)
+	nn_orig.copyNetwork(nn, true)
 
 	numsteps := 100
-	optalgs := []string{"", Adagrad, RMSprop, Adadelta}
+	optalgs := []string{"", Adagrad, RMSprop, Adadelta, ADAM}
 	alphas := []float64{0.01, 0.05, 0.1}
 	gdscopes := []int{0, GDoptimizationScopeAll}
 
@@ -129,8 +129,7 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
 		for _, alpha := range alphas {
 			for _, scope := range gdscopes {
 				// reset nn
-				nn.copyWeights(nn_orig, true)
-				copyStruct(nn.tunables, nn_orig.tunables)
+				nn.copyNetwork(nn_orig, false)
 				// set new tunables and config
 				nn.tunables.gdalgname = alg
 				nn.tunables.alpha = alpha
@@ -151,16 +150,13 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
 				cost /= float64(len(testingX))
 				if cost < avgcost {
 					avgcost = cost
-					nn_optm.copyWeights(nn, false)
-					copyStruct(nn_optm.tunables, nn.tunables)
+					nn_optm.copyNetwork(nn, false)
 				}
 			}
 		}
 	}
 	// use the best
-	nn.copyWeights(nn_optm, true)
-	copyStruct(nn.tunables, nn_orig.tunables)
-	//	copyStruct(nn.tunables, nn_optm.tunables)
+	nn.copyNetwork(nn_optm, false)
 	fmt.Println("pre-train cost:", avgcost)
 	fmt.Println("pre-train conf:", nn.tunables)
 }

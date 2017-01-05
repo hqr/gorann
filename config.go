@@ -29,17 +29,13 @@ const (
 	Adagrad                = "Adagrad"
 	Adadelta               = "Adadelta"
 	RMSprop                = "RMSprop"
+	ADAM                   = "ADAM"
 	GDoptimizationScopeAll = 1 << 0
 	//
 	// cost function
 	//
 	CostLinear   = "LMS"      // least mean squares
 	CostLogistic = "Logistic" // -y*log(h) - (1-y)*log(1-h)
-	//
-	// hyperparameters (https://en.wikipedia.org/wiki/Hyperparameter_optimization)
-	//
-	Epsilon = 0.00001
-	Gamma   = 0.9
 	//
 	// runtime tracking (weight, gradient, etc.) changes - can be used to control the behavior
 	//
@@ -48,14 +44,38 @@ const (
 	TrackGradientChanges = 1 << 2
 )
 
-// neural network tunables
+//
+// hyperparameters used with a given opt alg (https://en.wikipedia.org/wiki/Hyperparameter_optimization)
+//
+// ADAM as per https://arxiv.org/pdf/1412.6980.pdf
+const (
+	ADAM_alpha   = 0.001
+	ADAM_beta1   = 0.9
+	ADAM_beta2   = 0.999
+	ADAM_beta1_t = 1
+	ADAM_beta2_t = 1
+	ADAM_eps     = 1E-8
+)
+
+// Adagrad, Adadelta, RMSprop
+const GDALG_eps = 1E-5
+const GDALG_gamma = 0.9
+
+// neural network tunables - a superset
 type NeuTunables struct {
 	alpha          float64 // learning rate, typically 0.01 through 0.1
+	gdalgalpha     float64 // learning rate that is preferred with a specific optimization
 	momentum       float64 // https://en.wikipedia.org/wiki/Stochastic_gradient_descent#Momentum
-	costfunction   string  // squared euclidean distance aka LMS | Logistic
-	gdalgname      string  // gradient descent optimization algorithm (see above)
-	gdalgscope     int     // whether to apply optimization algorithm to all layers or just the last one
-	batchsize      int     // gradient descent: BatchSGD | BatchTrainingSet | minibatch
+	beta1          float64
+	beta2          float64
+	beta1_t        float64
+	beta2_t        float64
+	gamma          float64
+	eps            float64
+	costfunction   string // half squared euclidean distance (L2 norm) aka LMS | Logistic
+	gdalgname      string // gradient descent optimization algorithm (see above)
+	gdalgscope     int    // whether to apply optimization algorithm to all layers or just the last one
+	batchsize      int    // gradient descent: BatchSGD | BatchTrainingSet | minibatch
 	regularization int
 	tracking       int
 }

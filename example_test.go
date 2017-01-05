@@ -14,7 +14,8 @@ func ExampleF_xorbits() {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"sigmoid", 16}
 	output := NeuLayerConfig{"sigmoid", 1}
-	tunables := NeuTunables{alpha: 0.4, momentum: 0.6, batchsize: BatchSGD, costfunction: CostLinear, gdalgname: RMSprop}
+	// tunables := NeuTunables{alpha: 0.4, momentum: 0.6, batchsize: BatchSGD, costfunction: CostLinear, gdalgname: RMSprop}
+	tunables := NeuTunables{alpha: 0.4, momentum: 0.6, gdalgname: ADAM}
 	nn := NewNeuNetwork(input, hidden, 2, output, tunables)
 	maxint := int32(0xff)
 	normalize := func(vec []float64) {
@@ -67,11 +68,11 @@ func ExampleF_xorbits() {
 	}
 	fmt.Printf("error %d, loss %.5f\n", int(err)/4, loss/4)
 	// Output:
-	// 01110101 ^ 10001001 -> 11111110 : 11111100
-	// 01000010 ^ 01011100 -> 00011110 : 00011110
-	// 10101111 ^ 01110101 -> 11011110 : 11011010
-	// 10110011 ^ 11101100 -> 00110101 : 01011111
-	// error 12, loss 0.00331
+	// 01110101 ^ 10001001 -> 11111101 : 11111100
+	// 01000010 ^ 01011100 -> 01000011 : 00011110
+	// 10101111 ^ 01110101 -> 11010100 : 11011010
+	// 10110011 ^ 11101100 -> 01011010 : 01011111
+	// error 12, loss 0.00279
 }
 
 func ExampleF_sumsquares() {
@@ -133,12 +134,19 @@ func ExampleF_sumlogarithms() {
 	tunables := NeuTunables{alpha: 0.01, momentum: 0.5, batchsize: 10, gdalgname: RMSprop} //, gdalgscope: 1}
 	nn := NewNeuNetwork(input, hidden, 4, output, tunables)
 
+	normalize := func(vec []float64) {
+		divElemVector(vec, float64(-8))
+	}
+	denormalize := func(vec []float64) {
+		mulElemVector(vec, float64(-8))
+	}
+	nn.callbacks = NeuCallbacks{nil, normalize, denormalize}
+
 	sumlogarithms := func(xvec []float64) []float64 {
 		var y []float64 = []float64{0}
 		for i := 0; i < len(xvec); i++ {
 			y[0] += math.Log(xvec[i])
 		}
-		y[0] = -y[0] / 8
 		return y
 	}
 	Xs := newMatrix(100, 2)
@@ -160,16 +168,16 @@ func ExampleF_sumlogarithms() {
 		var xvec []float64 = []float64{0, 0}
 		xvec[0] = rand.Float64()
 		xvec[1] = rand.Float64()
-		y1 := nn.Predict(xvec)
 		y2 := sumlogarithms(xvec)
+		y1 := nn.Predict(xvec)
 		loss += nn.CostLinear(y2)
 		fmt.Printf("log(%.3f) + log(%.3f) -> %.3f : %.3f\n", xvec[0], xvec[1], y1[0], y2[0])
 	}
 	fmt.Printf("loss %.5f\n", loss/4.0)
 	// Output:
-	// log(0.925) + log(0.139) -> 0.249 : 0.256
-	// log(0.690) + log(0.329) -> 0.187 : 0.185
-	// log(0.375) + log(0.214) -> 0.300 : 0.315
-	// log(0.569) + log(0.246) -> 0.241 : 0.246
-	// loss 0.00004
+	// log(0.925) + log(0.139) -> -1.977 : -2.052
+	// log(0.690) + log(0.329) -> -1.502 : -1.482
+	// log(0.375) + log(0.214) -> -2.428 : -2.522
+	// log(0.569) + log(0.246) -> -1.945 : -1.968
+	// loss 0.00003
 }

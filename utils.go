@@ -102,50 +102,43 @@ func divElemMatrix(mat [][]float64, d float64) {
 	}
 }
 
-func distanceRows(matA [][]float64, matB [][]float64) float64 {
+// this is Frobenius norm (not to confuse with L2,1 norm)
+func normL2Matrix(matA [][]float64, matB [][]float64) float64 {
 	rows := len(matA)
+	assert(matB == nil || rows == len(matB))
 	edist := 0.0
-	if matB == nil {
-		for r := 0; r < rows; r++ {
-			edist += distanceVector(matA[r], nil)
-		}
-		return edist
-	}
-	assert(rows == len(matB))
-	cols := len(matA[0])
 	for r := 0; r < rows; r++ {
-		assert(cols == len(matB[r]))
-		edist += distanceVector(matA[r], matB[r])
+		edist += normL2VectorSquared(matA[r], nil)
 	}
-	return edist
+	return math.Sqrt(edist)
 }
 
-func distanceColumns(matA [][]float64, matB [][]float64) float64 {
-	rows := len(matB)
-	assert(rows == len(matA))
-	cols := len(matB[0])
+func normL2VectorSquared(avec []float64, bvec []float64) float64 {
+	cols := len(avec)
+	assert(bvec == nil || cols == len(bvec))
 	edist := 0.0
 	for c := 0; c < cols; c++ {
-		d := 0.0
-		for r := 0; r < rows; r++ {
-			assert(cols == len(matA[r]))
-			d += math.Pow(matA[r][c]-matB[r][c], 2)
-		}
-		edist += math.Sqrt(d)
-	}
-	return edist
-}
-
-func distanceVector(avec []float64, bvec []float64) float64 {
-	edist := 0.0
-	for c := 0; c < len(avec); c++ {
 		if bvec == nil {
 			edist += math.Pow(avec[c], 2)
 		} else {
 			edist += math.Pow(avec[c]-bvec[c], 2)
 		}
 	}
-	return math.Sqrt(edist)
+	return edist
+}
+
+func normL1Vector(avec []float64, bvec []float64) float64 {
+	cols := len(avec)
+	assert(bvec == nil || cols == len(bvec))
+	l1norm := 0.0
+	for c := 0; c < cols; c++ {
+		if bvec == nil {
+			l1norm += math.Abs(avec[c])
+		} else {
+			l1norm += math.Abs(avec[c] - bvec[c])
+		}
+	}
+	return l1norm
 }
 
 func divElemVector(vec []float64, d float64) {
