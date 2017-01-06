@@ -75,7 +75,7 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
 	numsteps := 100
 	optalgs := []string{"", Adagrad, RMSprop, Adadelta, ADAM}
 	alphas := []float64{0.01, 0.05, 0.1}
-	gdscopes := []int{0, GDoptimizationScopeAll}
+	gdscopes := []bool{false, true}
 
 	avgcost := float64(math.MaxInt32)
 	// prep training and testing sets
@@ -135,7 +135,7 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
 				nn.tunables.gdalgname = alg
 				nn.initgdalg(alg)
 				nn.tunables.alpha = alpha
-				nn.tunables.gdalgscope = scope
+				nn.tunables.gdalgscopeall = scope
 				// use the training set
 				nn.Train(trainingX, trainingY)
 				// use the testing set to calc the cost

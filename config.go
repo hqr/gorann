@@ -26,11 +26,10 @@ const (
 	// gradient descent non-linear optimization algorithms (e.g., http://sebastianruder.com/optimizing-gradient-descent)
 	// TODO: Nesterov, ADAM, BFGS, and LBFGS
 	//
-	Adagrad                = "Adagrad"
-	Adadelta               = "Adadelta"
-	RMSprop                = "RMSprop"
-	ADAM                   = "ADAM"
-	GDoptimizationScopeAll = 1 << 0
+	Adagrad  = "Adagrad"
+	Adadelta = "Adadelta"
+	RMSprop  = "RMSprop"
+	ADAM     = "ADAM"
 	//
 	// cost function
 	//
@@ -79,7 +78,7 @@ type NeuTunables struct {
 	eps            float64
 	costfunction   string // half squared euclidean distance (L2 norm) aka LMS | Logistic
 	gdalgname      string // gradient descent optimization algorithm (see above)
-	gdalgscope     int    // whether to apply optimization algorithm to all layers or just the last one
+	gdalgscopeall  bool   // whether to apply optimization algorithm to all layers or just the one facing output
 	batchsize      int    // gradient descent: BatchSGD | BatchTrainingSet | minibatch
 	regularization int
 	tracking       int

@@ -74,7 +74,7 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 
 	// other settings via TBD CLI
 	// nn.tunables.tracking = TrackWeightChanges | TrackGradientChanges
-	// nn.tunables.gdalgscope = GDoptimizationScopeAll
+	// nn.tunables.gdalgscopeall = true
 	return nn
 }
 
@@ -253,7 +253,7 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 			for j := 0; j < next.size; j++ {
 				// l-th layer, i-th neuron, j-th synapse
 				var weightij float64
-				if l == nn.lastidx-1 || nn.tunables.gdalgscope&GDoptimizationScopeAll > 0 {
+				if l == nn.lastidx-1 || nn.tunables.gdalgscopeall {
 					switch nn.tunables.gdalgname {
 					case Adagrad:
 						weightij = layer.weightij_Adagrad(i, j)
