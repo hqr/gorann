@@ -6,7 +6,7 @@ This is a from-scratch golang implementation inspired in part by the [Stanford M
 
 ## Keywords
 
-Gradient descent, SGD and batching, L1/L2 weight regularization, Adagrad, Adadelta and RMSprop optimizations, hyperparameters, activation functions, input and output normalization (callbacks) 
+Gradient descent, SGD and batching, L1/L2 weight regularization, Adagrad, Adadelta, RMSprop and ADAM optimizations, hyperparameters, activation functions, input and output normalization (callbacks) 
 
 ## TODO
 
