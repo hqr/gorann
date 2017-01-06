@@ -3,7 +3,30 @@ package gorann
 import (
 	"fmt"
 	"math"
+	"math/rand"
 )
+
+//
+// types
+//
+type TrainParams struct {
+	// either actual result set or one of the callbacks
+	resultset   [][]float64
+	resultvalcb func(xvec []float64) []float64 // generate yvec for a given xvec
+	resultidxcb func(xidx int) []float64       // compute yvec given an index of xvec from the training set
+	// repeat training set so many times
+	repeat int
+	// use %% of training set for testing
+	testingpct int
+	// converged? one or several of the conditions, whatever comes first
+	maxweightdelta float64 // L2 norm(previous-weights - current-weights)
+	maxgradnorm    float64 // L2 norm(gradient)
+	maxcost        float64 // average cost-function(testing-set)
+	maxerror       float64 // average L1 norm || yvec - predicted-yvec ||
+	// max counts
+	maxiterations int // max iterations on the given trainging set
+	maxbackprops  int // max total number of back propagations
+}
 
 func (nn *NeuNetwork) Predict(xvec []float64) []float64 {
 	yvec := nn.forward(xvec)
@@ -15,14 +38,11 @@ func (nn *NeuNetwork) Predict(xvec []float64) []float64 {
 	return ynorm
 }
 
-func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64, fy func([]float64) []float64) {
-	assert(nn.cinput.size == len(xvec), "wrong num Xs")
+func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
+	assert(nn.cinput.size == len(xvec), fmt.Sprintf("num inputs: %d (must be %d)", len(xvec), nn.cinput.size))
+	assert(nn.coutput.size == len(yvec), fmt.Sprintf("num outputs: %d (must be %d)", len(yvec), nn.coutput.size))
 
 	nn.forward(xvec)
-	if fy != nil {
-		yvec = fy(xvec)
-	}
-	assert(nn.coutput.size == len(yvec), "wrong num Ys")
 	var ynorm []float64 = yvec
 	if nn.callbacks.normcbY != nil {
 		ynorm = cloneVector(yvec)
@@ -31,42 +51,86 @@ func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64, fy func([]float6
 	nn.backprop(ynorm)
 }
 
-func (nn *NeuNetwork) Train(Xs [][]float64, arg interface{}) {
-	var Ys [][]float64
-	var fy func([]float64) []float64
+func (nn *NeuNetwork) Train(Xs [][]float64, p TrainParams) bool {
 	m := len(Xs)
+	assert(p.resultset == nil || len(p.resultset) == m)
+	assert(p.resultset != nil || p.resultvalcb != nil || p.resultidxcb != nil)
 	batchsize := nn.tunables.batchsize
 	if batchsize < 0 || batchsize > m {
 		batchsize = m
 	}
-	switch arg.(type) {
-	case [][]float64:
-		Ys = arg.([][]float64)
-		assert(m == len(Ys))
-	case func([]float64) []float64:
-		fy = arg.(func([]float64) []float64)
-	}
-	// do train
 	bi := 0
-	for i, xvec := range Xs {
-		var yvec []float64
-		if Ys != nil {
-			yvec = Ys[i]
-		}
-		assert(yvec == nil || fy == nil)
-		nn.TrainStep(xvec, yvec, fy)
-		bi++
-		if bi >= batchsize {
-			nn.fixWeights(batchsize)
-			bi = 0
-			if i+batchsize >= m {
-				batchsize = m - i - 1
+	repeat := p.repeat
+	if repeat <= 0 {
+		repeat = 1
+	}
+	iter := 0
+Loop:
+	for k := 0; k < repeat; k++ {
+		for i, xvec := range Xs {
+			yvec := yvecHelper(xvec, i, p)
+			nn.TrainStep(xvec, yvec)
+			bi++
+			if bi >= batchsize {
+				nn.fixWeights(batchsize)
+				bi = 0
+				if i+batchsize >= m && k == repeat-1 {
+					batchsize = m - i - 1
+				}
+			}
+			iter++
+			if p.maxiterations > 0 && iter >= p.maxiterations {
+				break Loop
+			}
+			if p.maxbackprops > 0 && nn.nbackprops >= p.maxbackprops {
+				break Loop
 			}
 		}
 	}
+	// convergence
+	if p.maxcost > 0 {
+		testingpct := p.testingpct
+		if testingpct == 0 {
+			testingpct = 10
+		}
+		testingnum := len(Xs) * testingpct / 100
+		if testingnum <= 2 {
+			testingnum = 2
+		}
+		cost := 0.0
+		for k := 0; k < testingnum; k++ {
+			i := int(rand.Int31n(int32(m)))
+			xvec := Xs[i]
+			yvec := yvecHelper(xvec, i, p)
+			nn.forward(xvec)
+			if nn.tunables.costfunction == CostLogistic {
+				cost += nn.CostLogistic(yvec)
+			} else {
+				cost += nn.CostLinear(yvec)
+			}
+		}
+		cost /= float64(testingnum)
+		return cost < p.maxcost
+	}
+
+	return false
 }
 
-func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
+func yvecHelper(xvec []float64, i int, p TrainParams) []float64 {
+	var yvec []float64
+	switch {
+	case p.resultset != nil:
+		yvec = p.resultset[i]
+	case p.resultvalcb != nil:
+		yvec = p.resultvalcb(xvec)
+	case p.resultidxcb != nil:
+		yvec = p.resultidxcb(i)
+	}
+	return yvec
+}
+
+func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
+	assert(p.resultset != nil || p.resultvalcb != nil || p.resultidxcb != nil)
 	nn_orig := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables.gdalgname)
 	nn_optm := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables.gdalgname)
 	nn_orig.copyNetwork(nn, true)
@@ -84,24 +148,11 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
 	numtesting := numsteps / 3
 	testingX := newMatrix(numtesting, len(Xs[0]))
 	testingY := newMatrix(numtesting, nn.coutput.size)
-	var Ys [][]float64
-	var fy func([]float64) []float64
-	var yvec []float64
 
-	switch arg.(type) {
-	case [][]float64:
-		Ys = arg.([][]float64)
-	case func([]float64) []float64:
-		fy = arg.(func([]float64) []float64)
-	}
 	step := 0
 	for step < numsteps {
 		for i, xvec := range Xs {
-			if fy == nil {
-				yvec = Ys[i]
-			} else {
-				yvec = fy(xvec)
-			}
+			yvec := yvecHelper(xvec, i, p)
 			copyVector(trainingX[step], xvec)
 			copyVector(trainingY[step], yvec)
 			step++
@@ -113,11 +164,7 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
 	j := 0
 	for i := len(Xs) - 1; i >= 0; i-- {
 		xvec := Xs[i]
-		if fy == nil {
-			yvec = Ys[i]
-		} else {
-			yvec = fy(xvec)
-		}
+		yvec := yvecHelper(xvec, i, p)
 		copyVector(testingX[j], xvec)
 		copyVector(testingY[j], yvec)
 		j++
@@ -137,11 +184,11 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
 				nn.tunables.alpha = alpha
 				nn.tunables.gdalgscopeall = scope
 				// use the training set
-				nn.Train(trainingX, trainingY)
+				nn.Train(trainingX, TrainParams{resultset: trainingY})
 				// use the testing set to calc the cost
 				cost := 0.0
 				for i, xvec := range testingX {
-					yvec = testingY[i]
+					yvec := testingY[i]
 					nn.forward(xvec)
 					if nn.tunables.costfunction == CostLogistic {
 						cost += nn.CostLogistic(yvec)

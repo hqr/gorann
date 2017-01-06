@@ -34,27 +34,19 @@ func ExampleF_xorbits() {
 		return y
 	}
 	Xs := newMatrix(100, 2)
-	for j := 0; j < 10000; j++ {
-		// fill with random bits 0 to 0x1111111
+	converged := false
+	for !converged {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0] = float64(rand.Int31n(maxint))
 			Xs[i][1] = float64(rand.Int31n(maxint))
 		}
-		// run each sample 2 times, use callback to compute true result for a given input
-		for k := 0; k < 2; k++ {
-			nn.Train(Xs, xorbits)
-		}
-		// debug
-		if nn.tunables.tracking > 0 && j%1000 == 0 {
-			nn.printTracks(j)
-		}
+		converged = nn.Train(Xs, TrainParams{resultvalcb: xorbits, repeat: 3, testingpct: 60, maxcost: 1E-3})
 	}
 	// test and print the results (expected output below)
 	var err, loss float64
-	for i := 0; i < 4; i++ {
-		var xvec []float64 = []float64{0, 0}
-		xvec[0] = float64(rand.Int31n(maxint))
-		xvec[1] = float64(rand.Int31n(maxint))
+	for k := 0; k < 4; k++ {
+		i := int(rand.Int31n(int32(len(Xs))))
+		xvec := Xs[i]
 		y1 := nn.Predict(xvec)
 		y2 := xorbits(xvec)
 		err += nn.AbsError(y2)
@@ -64,11 +56,11 @@ func ExampleF_xorbits() {
 	}
 	fmt.Printf("error %d, loss %.5f\n", int(err)/4, loss/4)
 	// Output:
-	// 01110101 ^ 10001001 -> 11111101 : 11111100
-	// 01000010 ^ 01011100 -> 01000011 : 00011110
-	// 10101111 ^ 01110101 -> 11010100 : 11011010
-	// 10110011 ^ 11101100 -> 01011010 : 01011111
-	// error 12, loss 0.00279
+	// 10010001 ^ 01101100 -> 11111100 : 11111101
+	// 01101101 ^ 10011110 -> 11110001 : 11110011
+	// 11001011 ^ 11011110 -> 00100000 : 00010101
+	// 10111101 ^ 00000011 -> 10110111 : 10111110
+	// error 4, loss 0.00035
 }
 
 func ExampleF_sumsquares() {
@@ -88,16 +80,13 @@ func ExampleF_sumsquares() {
 		return y
 	}
 	Xs := newMatrix(100, 2)
-	for j := 0; j < 5000; j++ {
-		// fill with random [0, 1.0)
+	converged := false
+	for !converged {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0] = rand.Float64() / 1.5
 			Xs[i][1] = rand.Float64() / 1.5
 		}
-		// train the network: run each sample 2 times and use the callback to compute true result
-		for k := 0; k < 2; k++ {
-			nn.Train(Xs, sumsquares)
-		}
+		converged = nn.Train(Xs, TrainParams{resultvalcb: sumsquares, repeat: 3, testingpct: 30, maxcost: 1E-6})
 	}
 	// use to estimate
 	var loss float64
@@ -112,11 +101,11 @@ func ExampleF_sumsquares() {
 	}
 	fmt.Printf("loss %.7f\n", loss/4.0)
 	// Output:
-	// 0.484**2 + 0.051**2 -> 0.235 : 0.236
-	// 0.368**2 + 0.255**2 -> 0.200 : 0.201
-	// 0.542**2 + 0.383**2 -> 0.439 : 0.440
-	// 0.266**2 + 0.354**2 -> 0.198 : 0.197
-	// loss 0.0000005
+	// 0.185**2 + 0.294**2 -> 0.120 : 0.121
+	// 0.185**2 + 0.229**2 -> 0.085 : 0.087
+	// 0.463**2 + 0.493**2 -> 0.459 : 0.458
+	// 0.362**2 + 0.529**2 -> 0.412 : 0.411
+	// loss 0.0000009
 }
 
 func ExampleF_sumlogarithms() {
@@ -153,9 +142,7 @@ func ExampleF_sumlogarithms() {
 			Xs[i][0] = rand.Float64()
 			Xs[i][1] = rand.Float64()
 		}
-		for k := 0; k < 3; k++ {
-			nn.Train(Xs, sumlogarithms)
-		}
+		nn.Train(Xs, TrainParams{resultvalcb: sumlogarithms, repeat: 3})
 	}
 
 	// use to estimate

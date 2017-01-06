@@ -178,6 +178,10 @@ func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
 func (nn *NeuNetwork) backprop(yvec []float64) {
 	assert(len(yvec) == nn.coutput.size)
 	nn.nbackprops++
+	// FIXME, make it a policy
+	// if nn.nbackprops == 1000 && nn.tunables.momentum < 0.9 {
+	//	nn.tunables.momentum = 0.9
+	//}
 	//
 	// compute deltas moving from the last layer back to the first
 	//
