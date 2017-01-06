@@ -14,9 +14,10 @@ func ExampleF_xorbits() {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"sigmoid", 16}
 	output := NeuLayerConfig{"sigmoid", 1}
-	// tunables := NeuTunables{alpha: 0.4, momentum: 0.6, batchsize: BatchSGD, costfunction: CostLinear, gdalgname: RMSprop}
-	tunables := NeuTunables{alpha: 0.4, momentum: 0.6, gdalgname: ADAM}
-	nn := NewNeuNetwork(input, hidden, 2, output, tunables)
+	// tunables := NeuTunables{alpha: 0.4, momentum: 0.6, gdalgname: ADAM}
+	nn := NewNeuNetwork(input, hidden, 2, output, ADAM)
+	nn.tunables.alpha = 0.4
+
 	maxint := int32(0xff)
 	normalize := func(vec []float64) {
 		divElemVector(vec, float64(maxint))
@@ -82,8 +83,10 @@ func ExampleF_sumsquares() {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"tanh", 6}
 	output := NeuLayerConfig{"sigmoid", 1}
-	tunables := NeuTunables{alpha: 0.01, momentum: 0.999, batchsize: 10, gdalgname: Adadelta}
-	nn := NewNeuNetwork(input, hidden, 2, output, tunables)
+	// tunables := NeuTunables{alpha: 0.01, momentum: 0.999, batchsize: 10, gdalgname: Adadelta}
+	nn := NewNeuNetwork(input, hidden, 2, output, Adadelta)
+	nn.tunables.momentum = 0.999
+	nn.tunables.batchsize = 10
 
 	sumsquares := func(xvec []float64) []float64 {
 		var y []float64 = []float64{0}
@@ -131,8 +134,10 @@ func ExampleF_sumlogarithms() {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"tanh", 8}
 	output := NeuLayerConfig{"tanh", 1}
-	tunables := NeuTunables{alpha: 0.01, momentum: 0.5, batchsize: 10, gdalgname: RMSprop} //, gdalgscope: 1}
-	nn := NewNeuNetwork(input, hidden, 4, output, tunables)
+	// tunables := NeuTunables{alpha: 0.01, momentum: 0.5, batchsize: 10, gdalgname: RMSprop} //, gdalgscope: 1}
+	nn := NewNeuNetwork(input, hidden, 4, output, RMSprop)
+	nn.tunables.momentum = 0.5
+	nn.tunables.batchsize = 10
 
 	normalize := func(vec []float64) {
 		divElemVector(vec, float64(-8))

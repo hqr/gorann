@@ -39,8 +39,8 @@ type NeuLayer struct {
 }
 
 // c-tor
-func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, coutput NeuLayerConfig, tunables NeuTunables) *NeuNetwork {
-	nn := &NeuNetwork{cinput: cinput, chidden: chidden, coutput: coutput, tunables: tunables}
+func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, coutput NeuLayerConfig, gdalgname string) *NeuNetwork {
+	nn := &NeuNetwork{cinput: cinput, chidden: chidden, coutput: coutput}
 
 	nn.lastidx = numhidden + 1
 	nn.layers = make([]*NeuLayer, numhidden+2)
@@ -66,10 +66,10 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 		layer := nn.layers[idx]
 		layer.init(nn)
 	}
-	if nn.tunables.batchsize < BatchSGD {
-		nn.tunables.batchsize = BatchSGD
-	}
-	// algorithm-specific initialization
+	// default tunables common for all
+	nn.tunables = NeuTunables{alpha: DEFAULT_alpha, momentum: DEFAULT_momentum, batchsize: DEFAULT_batchsize, gdalgname: gdalgname}
+
+	// algorithm-specific default hyperparams
 	nn.initgdalg(nn.tunables.gdalgname)
 
 	// other settings via TBD CLI
@@ -99,8 +99,6 @@ func (nn *NeuNetwork) copyNetwork(from *NeuNetwork, weightsonly bool) {
 		zeroMatrix(layer.gradient)
 		zeroMatrix(layer.pregradient)
 		zeroMatrix(layer.rmsgradient)
-
-		layer.initgdalg(nn.tunables.gdalgname)
 	}
 }
 
@@ -117,7 +115,6 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 	layer.pregradient = newMatrix(layer.size, layer.next.size)
 	layer.rmsgradient = newMatrix(layer.size, layer.next.size)
 
-	layer.initgdalg(nn.tunables.gdalgname)
 	layer.weitrack = newVector(10) // nn.tunables.tracking & TrackWeightChanges
 	layer.gratrack = newVector(10) // nn.tunables.tracking & TrackGradientChanges
 	layer.costrack = newVector(10) // nn.tunables.tracking & TrackCostChanges
@@ -132,21 +129,18 @@ func (nn *NeuNetwork) initgdalg(gdalgname string) {
 		nn.tunables.beta2_t = ADAM_beta2_t
 		nn.tunables.eps = ADAM_eps
 	} else if gdalgname == Adagrad {
-		nn.tunables.gdalgalpha = nn.tunables.alpha
 		nn.tunables.eps = GDALG_eps
 	} else if gdalgname == Adadelta || gdalgname == RMSprop {
-		nn.tunables.gdalgalpha = nn.tunables.alpha
 		nn.tunables.eps = GDALG_eps
 		nn.tunables.gamma = GDALG_gamma
 	}
-}
-
-func (layer *NeuLayer) initgdalg(gdalgname string) {
-	if gdalgname == ADAM {
-		layer.avegradient = newMatrix(layer.size, layer.next.size)
-	}
-	if gdalgname == Adadelta {
-		layer.rmswupdates = newMatrix(layer.size, layer.next.size)
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		if gdalgname == ADAM {
+			layer.avegradient = newMatrix(layer.size, layer.next.size)
+		} else if gdalgname == Adadelta {
+			layer.rmswupdates = newMatrix(layer.size, layer.next.size)
+		}
 	}
 }
 
@@ -297,7 +291,7 @@ func (layer *NeuLayer) weightij(i int, j int) float64 {
 
 func (layer *NeuLayer) weightij_Adagrad(i int, j int) float64 {
 	nn := layer.nn
-	alpha := nn.tunables.gdalgalpha
+	alpha := nn.tunables.alpha
 	weightij := layer.weights[i][j]
 	eps := nn.tunables.eps
 
@@ -315,7 +309,7 @@ func (layer *NeuLayer) weightij_Adagrad(i int, j int) float64 {
 
 func (layer *NeuLayer) weightij_Adadelta(i int, j int) float64 {
 	nn := layer.nn
-	alpha := nn.tunables.gdalgalpha
+	alpha := nn.tunables.alpha
 	weightij := layer.weights[i][j]
 	gamma, g1, eps := nn.tunables.gamma, 1-nn.tunables.gamma, nn.tunables.eps
 
@@ -337,7 +331,7 @@ func (layer *NeuLayer) weightij_Adadelta(i int, j int) float64 {
 
 func (layer *NeuLayer) weightij_RMSprop(i int, j int) float64 {
 	nn := layer.nn
-	alpha := nn.tunables.gdalgalpha
+	alpha := nn.tunables.alpha
 	weightij := layer.weights[i][j]
 	gamma, g1, eps := nn.tunables.gamma, 1-nn.tunables.gamma, nn.tunables.eps
 

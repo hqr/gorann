@@ -67,9 +67,10 @@ func (nn *NeuNetwork) Train(Xs [][]float64, arg interface{}) {
 }
 
 func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
-	nn_orig := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables)
-	nn_optm := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables)
+	nn_orig := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables.gdalgname)
+	nn_optm := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables.gdalgname)
 	nn_orig.copyNetwork(nn, true)
+	nn_optm.copyNetwork(nn, true)
 
 	numsteps := 100
 	optalgs := []string{"", Adagrad, RMSprop, Adadelta, ADAM}
@@ -132,6 +133,7 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, arg interface{}) {
 				nn.copyNetwork(nn_orig, false)
 				// set new tunables and config
 				nn.tunables.gdalgname = alg
+				nn.initgdalg(alg)
 				nn.tunables.alpha = alpha
 				nn.tunables.gdalgscope = scope
 				// use the training set

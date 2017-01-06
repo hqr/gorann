@@ -57,7 +57,12 @@ const (
 	ADAM_eps     = 1E-8
 )
 
-// Adagrad, Adadelta, RMSprop
+// Defaults across all algorithms
+const DEFAULT_batchsize = BatchSGD
+const DEFAULT_alpha = 0.01
+const DEFAULT_momentum = 0.6
+
+// Defaults for: Adagrad, Adadelta, RMSprop
 const GDALG_eps = 1E-5
 const GDALG_gamma = 0.9
 
