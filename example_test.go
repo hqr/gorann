@@ -34,8 +34,8 @@ func ExampleF_xorbits() {
 		return y
 	}
 	Xs := newMatrix(100, 2)
-	converged := false
-	for !converged {
+	converged := 0
+	for converged == 0 {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0] = float64(rand.Int31n(maxint))
 			Xs[i][1] = float64(rand.Int31n(maxint))
@@ -80,8 +80,8 @@ func ExampleF_sumsquares() {
 		return y
 	}
 	Xs := newMatrix(100, 2)
-	converged := false
-	for !converged {
+	converged := 0
+	for converged == 0 {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0] = rand.Float64() / 1.5
 			Xs[i][1] = rand.Float64() / 1.5
@@ -115,7 +115,7 @@ func ExampleF_sumlogarithms() {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"tanh", 8}
 	output := NeuLayerConfig{"tanh", 1}
-	nn := NewNeuNetwork(input, hidden, 4, output, RMSprop)
+	nn := NewNeuNetwork(input, hidden, 5, output, RMSprop)
 	nn.tunables.momentum = 0.5
 	nn.tunables.batchsize = 10
 
@@ -135,14 +135,16 @@ func ExampleF_sumlogarithms() {
 		return y
 	}
 	Xs := newMatrix(100, 2)
-
-	for j := 0; j < 1000; j++ {
-		// run each sample 2 times, use callback to compute true result for a given input
+	var converged int
+	for converged&ConvergedWeight == 0 || converged&ConvergedGradient == 0 {
 		for i := 0; i < len(Xs); i++ {
-			Xs[i][0] = rand.Float64()
-			Xs[i][1] = rand.Float64()
+			Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
 		}
-		nn.Train(Xs, TrainParams{resultvalcb: sumlogarithms, repeat: 3})
+		converged = nn.Train(Xs, TrainParams{resultvalcb: sumlogarithms, repeat: 3, maxweightdelta: 0.005, maxgradnorm: 0.01, maxbackprops: 4E6})
+		if converged&ConvergedMaxBackprops > 0 {
+			fmt.Printf("maxed out back propagations %d\n", nn.nbackprops)
+			break
+		}
 	}
 
 	// use to estimate
@@ -156,11 +158,11 @@ func ExampleF_sumlogarithms() {
 		loss += nn.CostLinear(y2)
 		fmt.Printf("log(%.3f) + log(%.3f) -> %.3f : %.3f\n", xvec[0], xvec[1], y1[0], y2[0])
 	}
-	fmt.Printf("loss %.5f\n", loss/4.0)
+	fmt.Printf("loss %.7f\n", loss/4.0)
 	// Output:
-	// log(0.925) + log(0.139) -> -2.042 : -2.052
-	// log(0.690) + log(0.329) -> -1.551 : -1.482
-	// log(0.375) + log(0.214) -> -2.473 : -2.522
-	// log(0.569) + log(0.246) -> -1.979 : -1.968
-	// loss 0.00001
+	// log(0.837) + log(0.251) -> -1.559 : -1.562
+	// log(0.708) + log(0.095) -> -2.768 : -2.701
+	// log(0.184) + log(0.856) -> -1.869 : -1.850
+	// log(0.525) + log(0.896) -> -0.748 : -0.754
+	// loss 0.0000096
 }

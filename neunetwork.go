@@ -32,10 +32,6 @@ type NeuLayer struct {
 	rmsgradient [][]float64 // average or moving average of the RMS(gradient)
 	rmswupdates [][]float64 // moving average of the RMS(weight update) - Adadelta only
 	avegradient [][]float64 // average or moving average of the gradient - ADAM only
-	// tracking
-	weitrack []float64 // weight changes expressed as euclidean distances: sum(distance(neuron-curr, neuron-prev)))
-	gratrack []float64 // past and current euclidean-norm(gradients)
-	costrack []float64 // last so many cost (function) values
 }
 
 // c-tor
@@ -73,7 +69,6 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 	nn.initgdalg(nn.tunables.gdalgname)
 
 	// other settings via TBD CLI
-	// nn.tunables.tracking = TrackWeightChanges | TrackGradientChanges
 	// nn.tunables.gdalgscopeall = true
 	return nn
 }
@@ -114,10 +109,6 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 	layer.gradient = newMatrix(layer.size, layer.next.size)
 	layer.pregradient = newMatrix(layer.size, layer.next.size)
 	layer.rmsgradient = newMatrix(layer.size, layer.next.size)
-
-	layer.weitrack = newVector(10) // nn.tunables.tracking & TrackWeightChanges
-	layer.gratrack = newVector(10) // nn.tunables.tracking & TrackGradientChanges
-	layer.costrack = newVector(10) // nn.tunables.tracking & TrackCostChanges
 }
 
 func (nn *NeuNetwork) initgdalg(gdalgname string) {
@@ -231,11 +222,6 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 			divElemMatrix(layer.gradient, float64(batchsize))
 		}
 	}
-	var dotrackg, dotrackw bool
-	if nn.nbackprops%100 == 0 {
-		dotrackw = nn.tunables.tracking&TrackWeightChanges > 0
-		dotrackg = nn.tunables.tracking&TrackGradientChanges > 0
-	}
 	if nn.tunables.gdalgname == ADAM {
 		nn.tunables.beta1_t *= nn.tunables.beta1
 		nn.tunables.beta2_t *= nn.tunables.beta2
@@ -243,15 +229,6 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		next := layer.next
-		var prew [][]float64
-		if dotrackw {
-			prew = cloneMatrix(layer.weights)
-		}
-		if dotrackg {
-			edist0 := normL2Matrix(layer.gradient, nil)
-			shiftVector(layer.gratrack)
-			pushVector(layer.gratrack, edist0)
-		}
 		// move the weights in the direction opposite to the corresponding gradient vectors
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
@@ -275,11 +252,6 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 				layer.pregradient[i][j] = layer.gradient[i][j]
 				layer.gradient[i][j] = 0
 			}
-		}
-		if dotrackw {
-			edist := normL2Matrix(prew, layer.weights)
-			shiftVector(layer.weitrack)
-			pushVector(layer.weitrack, edist)
 		}
 	}
 }

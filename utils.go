@@ -108,7 +108,11 @@ func normL2Matrix(matA [][]float64, matB [][]float64) float64 {
 	assert(matB == nil || rows == len(matB))
 	edist := 0.0
 	for r := 0; r < rows; r++ {
-		edist += normL2VectorSquared(matA[r], nil)
+		if matB == nil {
+			edist += normL2VectorSquared(matA[r], nil)
+		} else {
+			edist += normL2VectorSquared(matA[r], matB[r])
+		}
 	}
 	return math.Sqrt(edist)
 }

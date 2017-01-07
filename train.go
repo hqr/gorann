@@ -2,8 +2,20 @@ package gorann
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
+)
+
+//
+// constants
+//
+const (
+	ConvergedCost = 1 << iota
+	ConvergedWeight
+	ConvergedGradient
+	ConvergedMaxIterations
+	ConvergedMaxBackprops
 )
 
 //
@@ -51,7 +63,7 @@ func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
 	nn.backprop(ynorm)
 }
 
-func (nn *NeuNetwork) Train(Xs [][]float64, p TrainParams) bool {
+func (nn *NeuNetwork) Train(Xs [][]float64, p TrainParams) int {
 	m := len(Xs)
 	assert(p.resultset == nil || len(p.resultset) == m)
 	assert(p.resultset != nil || p.resultvalcb != nil || p.resultidxcb != nil)
@@ -59,20 +71,34 @@ func (nn *NeuNetwork) Train(Xs [][]float64, p TrainParams) bool {
 	if batchsize < 0 || batchsize > m {
 		batchsize = m
 	}
-	bi := 0
-	repeat := p.repeat
+	bi, repeat, converged, iter := 0, p.repeat, 0, 0
 	if repeat <= 0 {
 		repeat = 1
 	}
-	iter := 0
+	// the last so-many L2 norm(previous-weights - current-weights) and L2norm(gradient)
+	var weitrack []float64 = newVector(10)
+	var gratrack []float64 = newVector(10)
+	var nw, ng int
 Loop:
 	for k := 0; k < repeat; k++ {
 		for i, xvec := range Xs {
 			yvec := yvecHelper(xvec, i, p)
 			nn.TrainStep(xvec, yvec)
+			if p.maxgradnorm > 0 {
+				nn.gradnormHelper(gratrack)
+				ng++
+			}
 			bi++
 			if bi >= batchsize {
+				var prew [][]float64
+				if p.maxweightdelta > 0 {
+					prew = nn.weightdeltaBefore()
+					nw++
+				}
 				nn.fixWeights(batchsize)
+				if p.maxweightdelta > 0 {
+					nn.weightdeltaAfter(weitrack, prew)
+				}
 				bi = 0
 				if i+batchsize >= m && k == repeat-1 {
 					batchsize = m - i - 1
@@ -80,14 +106,16 @@ Loop:
 			}
 			iter++
 			if p.maxiterations > 0 && iter >= p.maxiterations {
+				converged |= ConvergedMaxIterations
 				break Loop
 			}
 			if p.maxbackprops > 0 && nn.nbackprops >= p.maxbackprops {
+				converged |= ConvergedMaxBackprops
 				break Loop
 			}
 		}
 	}
-	// convergence
+	// convergence: max cost
 	if p.maxcost > 0 {
 		testingpct := p.testingpct
 		if testingpct == 0 {
@@ -110,10 +138,55 @@ Loop:
 			}
 		}
 		cost /= float64(testingnum)
-		return cost < p.maxcost
+		if cost <= p.maxcost {
+			converged |= ConvergedCost
+		}
 	}
+	// convergence: weights
+	if p.maxweightdelta > 0 && nw > 3 {
+		failed := false
+		for i := 0; i < len(weitrack); i++ {
+			if weitrack[i] > p.maxweightdelta {
+				failed = true
+			}
+		}
+		if !failed {
+			converged |= ConvergedWeight
+		}
+	}
+	// convergence: grads
+	if p.maxgradnorm > 0 && ng > 3 {
+		failed := false
+		for i := 0; i < len(gratrack); i++ {
+			if gratrack[i] > p.maxgradnorm {
+				failed = true
+			}
+		}
+		if !failed {
+			converged |= ConvergedGradient
+		}
+	}
+	return converged
+}
 
-	return false
+func (nn *NeuNetwork) gradnormHelper(gratrack []float64) {
+	layer := nn.layers[nn.lastidx-1] // the last hidden layer, next to the output
+	edist0 := normL2Matrix(layer.gradient, nil)
+	shiftVector(gratrack)
+	pushVector(gratrack, edist0)
+}
+
+func (nn *NeuNetwork) weightdeltaBefore() [][]float64 {
+	layer := nn.layers[nn.lastidx-1] // the last hidden layer, next to the output
+	prew := cloneMatrix(layer.weights)
+	return prew
+}
+
+func (nn *NeuNetwork) weightdeltaAfter(weitrack []float64, prew [][]float64) {
+	layer := nn.layers[nn.lastidx-1] // last hidden
+	edist := normL2Matrix(prew, layer.weights)
+	shiftVector(weitrack)
+	pushVector(weitrack, edist)
 }
 
 func yvecHelper(xvec []float64, i int, p TrainParams) []float64 {
@@ -211,17 +284,23 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 }
 
 // debug
-func (nn *NeuNetwork) printTracks(iter int) {
-	for l := 0; l < nn.lastidx; l++ {
-		layer := nn.layers[l]
-		var w, g string
-		for j := 0; j < len(layer.weitrack); j++ {
-			w += fmt.Sprintf(" %.3f", layer.weitrack[j])
+func logWei(iter int, weitrack []float64) {
+	var w string
+	for j := 0; j < len(weitrack); j++ {
+		if weitrack[j] == 0 {
+			continue
 		}
-		for j := 0; j < len(layer.gratrack); j++ {
-			g += fmt.Sprintf(" %.3f", layer.gratrack[j])
-		}
-		fmt.Printf("%6d: [%2d L2(w changes)]%s\n", iter, layer.idx, w)
-		fmt.Printf("%6d: [%2d L2(gradients)]%s\n", iter, layer.idx, g)
+		w += fmt.Sprintf(" %.3f", weitrack[j])
 	}
+	log.Print(iter, w)
+}
+func logGra(iter int, gratrack []float64) {
+	var g string
+	for j := 0; j < len(gratrack); j++ {
+		if gratrack[j] == 0 {
+			continue
+		}
+		g += fmt.Sprintf(" %.3f", gratrack[j])
+	}
+	log.Print(iter, g)
 }

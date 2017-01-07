@@ -35,12 +35,6 @@ const (
 	//
 	CostLinear   = "LMS"      // least mean squares
 	CostLogistic = "Logistic" // -y*log(h) - (1-y)*log(1-h)
-	//
-	// runtime tracking (weight, gradient, etc.) changes - can be used to control the behavior
-	//
-	TrackWeightChanges   = 1 << 0
-	TrackCostChanges     = 1 << 1
-	TrackGradientChanges = 1 << 2
 )
 
 //
@@ -81,5 +75,4 @@ type NeuTunables struct {
 	gdalgscopeall  bool   // whether to apply optimization algorithm to all layers or just the one facing output
 	batchsize      int    // gradient descent: BatchSGD | BatchTrainingSet | minibatch
 	regularization int
-	tracking       int
 }
