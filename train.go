@@ -1,6 +1,7 @@
 package gorann
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -17,6 +18,12 @@ const (
 	ConvergedMaxIterations
 	ConvergedMaxBackprops
 )
+
+type CommandLine struct {
+	tracenumbp int
+}
+
+var cli = CommandLine{}
 
 //
 // types
@@ -38,6 +45,12 @@ type TrainParams struct {
 	// max counts
 	maxiterations int // max iterations on the given trainging set
 	maxbackprops  int // max total number of back propagations
+}
+
+func init() {
+	flag.IntVar(&cli.tracenumbp, "nbp", 0, "trace interval")
+
+	flag.Parse()
 }
 
 func (nn *NeuNetwork) Predict(xvec []float64) []float64 {
@@ -79,11 +92,16 @@ func (nn *NeuNetwork) Train(Xs [][]float64, p TrainParams) int {
 	var weitrack []float64 = newVector(10)
 	var gratrack []float64 = newVector(10)
 	var nw, ng int
+	var trace_cost bool
+
 Loop:
 	for k := 0; k < repeat; k++ {
 		for i, xvec := range Xs {
 			yvec := yvecHelper(xvec, i, p)
 			nn.TrainStep(xvec, yvec)
+			if cli.tracenumbp > 0 && nn.nbackprops%cli.tracenumbp == 0 {
+				trace_cost = true
+			}
 			if p.maxgradnorm > 0 {
 				nn.gradnormHelper(gratrack)
 				ng++
@@ -116,7 +134,7 @@ Loop:
 		}
 	}
 	// convergence: max cost
-	if p.maxcost > 0 {
+	if p.maxcost > 0 || trace_cost {
 		testingpct := p.testingpct
 		if testingpct == 0 {
 			testingpct = 10
@@ -140,6 +158,9 @@ Loop:
 		cost /= float64(testingnum)
 		if cost <= p.maxcost {
 			converged |= ConvergedCost
+		}
+		if trace_cost {
+			log.Print(nn.nbackprops, fmt.Sprintf(" c %f", cost))
 		}
 	}
 	// convergence: weights
@@ -206,8 +227,8 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 	assert(p.resultset != nil || p.resultvalcb != nil || p.resultidxcb != nil)
 	nn_orig := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables.gdalgname)
 	nn_optm := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables.gdalgname)
-	nn_orig.copyNetwork(nn, true)
-	nn_optm.copyNetwork(nn, true)
+	nn_orig.copyNetwork(nn)
+	nn_optm.copyNetwork(nn)
 
 	numsteps := 100
 	optalgs := []string{"", Adagrad, RMSprop, Adadelta, ADAM}
@@ -250,7 +271,8 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 		for _, alpha := range alphas {
 			for _, scope := range gdscopes {
 				// reset nn
-				nn.copyNetwork(nn_orig, false)
+				nn.reset()
+				nn.copyNetwork(nn_orig)
 				// set new tunables and config
 				nn.tunables.gdalgname = alg
 				nn.initgdalg(alg)
@@ -272,35 +294,37 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 				cost /= float64(len(testingX))
 				if cost < avgcost {
 					avgcost = cost
-					nn_optm.copyNetwork(nn, false)
+					nn_optm.copyNetwork(nn)
 				}
 			}
 		}
 	}
 	// use the best
-	nn.copyNetwork(nn_optm, false)
+	nn.reset()
+	nn.copyNetwork(nn_optm)
 	fmt.Println("pre-train cost:", avgcost)
 	fmt.Println("pre-train conf:", nn.tunables)
 }
 
 // debug
 func logWei(iter int, weitrack []float64) {
-	var w string
+	var w string = " w"
 	for j := 0; j < len(weitrack); j++ {
 		if weitrack[j] == 0 {
 			continue
 		}
-		w += fmt.Sprintf(" %.3f", weitrack[j])
+		w += fmt.Sprintf(" %.6f", weitrack[j])
 	}
 	log.Print(iter, w)
 }
+
 func logGra(iter int, gratrack []float64) {
-	var g string
+	var g string = " g"
 	for j := 0; j < len(gratrack); j++ {
 		if gratrack[j] == 0 {
 			continue
 		}
-		g += fmt.Sprintf(" %.3f", gratrack[j])
+		g += fmt.Sprintf(" %.6f", gratrack[j])
 	}
 	log.Print(iter, g)
 }

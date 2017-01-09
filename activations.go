@@ -21,6 +21,7 @@ func init() {
 	RegisterActivation(&Activation{"sigmoid", sigmoid, dsigmoid, nil})
 	RegisterActivation(&Activation{"tanh", tanh, dtanh, nil})
 	RegisterActivation(&Activation{"relu", relu, nil, drelu})
+	RegisterActivation(&Activation{"leakyrelu", leakyrelu, nil, dleakyrelu})
 	RegisterActivation(&Activation{"softplus", softplus, nil, dsoftplus})
 }
 
@@ -61,6 +62,23 @@ func drelu(x float64) float64 {
 		return 1
 	}
 	return 0
+}
+
+// aka parametric Rectifier
+const LeakyApha = 1E-4
+
+func leakyrelu(x float64) float64 {
+	if x < 0 {
+		return LeakyApha * x
+	}
+	return x
+}
+
+func dleakyrelu(x float64) float64 {
+	if x > 0 {
+		return 1
+	}
+	return LeakyApha
 }
 
 func softplus(x float64) float64 {

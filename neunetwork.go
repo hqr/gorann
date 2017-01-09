@@ -73,27 +73,28 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 	return nn
 }
 
-func (nn *NeuNetwork) copyNetwork(from *NeuNetwork, weightsonly bool) {
-	assert(nn.lastidx == from.lastidx)
-	if !weightsonly {
-		copyStruct(nn.tunables, from.tunables)
-		nn.initgdalg(nn.tunables.gdalgname)
-	}
+func (nn *NeuNetwork) reset() {
+	nn.initgdalg(nn.tunables.gdalgname)
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
-		layer_from := from.layers[l]
-		assert(layer.config.size == layer_from.config.size)
-
-		copyMatrix(layer.weights, layer_from.weights)
-		if weightsonly {
-			continue
-		}
 		fillVector(layer.avec, 1.0)
 		fillVector(layer.zvec, 1.0)
 		fillVector(layer.deltas, 0.0)
 		zeroMatrix(layer.gradient)
 		zeroMatrix(layer.pregradient)
 		zeroMatrix(layer.rmsgradient)
+	}
+}
+
+func (nn *NeuNetwork) copyNetwork(from *NeuNetwork) {
+	assert(nn.lastidx == from.lastidx)
+	copyStruct(nn.tunables, from.tunables)
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		layer_from := from.layers[l]
+		assert(layer.config.size == layer_from.config.size)
+
+		copyMatrix(layer.weights, layer_from.weights)
 	}
 }
 
@@ -105,7 +106,7 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 	if layer.next == nil {
 		return
 	}
-	layer.weights = newMatrix(layer.size, layer.next.size, -1.0, 1.0)
+	layer.weights = newMatrix(layer.size, layer.next.size, -1.0, 1.0) // FIXME: make configurable
 	layer.gradient = newMatrix(layer.size, layer.next.size)
 	layer.pregradient = newMatrix(layer.size, layer.next.size)
 	layer.rmsgradient = newMatrix(layer.size, layer.next.size)
@@ -169,12 +170,8 @@ func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
 func (nn *NeuNetwork) backprop(yvec []float64) {
 	assert(len(yvec) == nn.coutput.size)
 	nn.nbackprops++
-	// FIXME, make it a policy
-	// if nn.nbackprops == 1000 && nn.tunables.momentum < 0.9 {
-	//	nn.tunables.momentum = 0.9
-	//}
 	//
-	// compute deltas moving from the last layer back to the first
+	// compute deltas while moving from the output layer back to the input
 	//
 	outputL := nn.layers[nn.lastidx]
 	actF := activations[outputL.config.actfname]
@@ -247,6 +244,9 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 					}
 				} else {
 					weightij = layer.weightij(i, j)
+				}
+				if l == nn.lastidx-1 && nn.tunables.regularization > 0 {
+					weightij -= 0.01 * layer.weights[i][j]
 				}
 				layer.weights[i][j] = weightij
 				layer.pregradient[i][j] = layer.gradient[i][j]
