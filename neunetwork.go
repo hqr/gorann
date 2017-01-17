@@ -2,6 +2,7 @@ package gorann
 
 import (
 	"math"
+	"math/rand"
 )
 
 type NeuNetwork struct {
@@ -32,6 +33,7 @@ type NeuLayer struct {
 	rmsgradient [][]float64 // average or moving average of the RMS(gradient)
 	rmswupdates [][]float64 // moving average of the RMS(weight update) - Adadelta only
 	avegradient [][]float64 // average or moving average of the gradient - ADAM only
+	wupdates    [][]float64 // weight updates - Rprop only
 }
 
 // c-tor
@@ -106,10 +108,39 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 	if layer.next == nil {
 		return
 	}
-	layer.weights = newMatrix(layer.size, layer.next.size, -1.0, 1.0) // FIXME: make configurable
+	layer.weights = newMatrix(layer.size, layer.next.size, -1.0, 1.0)
+	next := layer.next
+	// init weights, alt init below
+	for i := 0; i < layer.size; i++ {
+		for j := 0; j < next.size; j++ {
+			if layer.weights[i][j] >= 0 && layer.weights[i][j] < 0.5 {
+				layer.weights[i][j] = 1 - layer.weights[i][j]
+			} else if layer.weights[i][j] < 0 && layer.weights[i][j] > -0.5 {
+				layer.weights[i][j] = -(1 + layer.weights[i][j])
+			}
+		}
+	}
 	layer.gradient = newMatrix(layer.size, layer.next.size)
 	layer.pregradient = newMatrix(layer.size, layer.next.size)
 	layer.rmsgradient = newMatrix(layer.size, layer.next.size)
+}
+
+func (nn *NeuNetwork) reinitWeights() {
+	u := math.Sqrt(float64(nn.lastidx*2)) / math.Sqrt(float64(nn.cinput.size+nn.coutput.size))
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		next := layer.next
+		for i := 0; i < layer.size; i++ {
+			for j := 0; j < next.size; j++ {
+				r := rand.Float64()
+				if r >= 0.5 {
+					layer.weights[i][j] = r * u
+				} else {
+					layer.weights[i][j] = (r - 1) * u
+				}
+			}
+		}
+	}
 }
 
 func (nn *NeuNetwork) initgdalg(gdalgname string) {
@@ -120,6 +151,9 @@ func (nn *NeuNetwork) initgdalg(gdalgname string) {
 		nn.tunables.beta1_t = ADAM_beta1_t
 		nn.tunables.beta2_t = ADAM_beta2_t
 		nn.tunables.eps = ADAM_eps
+	} else if gdalgname == Rprop {
+		nn.tunables.eta = Rprop_eta
+		nn.tunables.neta = Rprop_neta
 	} else if gdalgname == Adagrad {
 		nn.tunables.eps = GDALG_eps
 	} else if gdalgname == Adadelta || gdalgname == RMSprop {
@@ -132,6 +166,8 @@ func (nn *NeuNetwork) initgdalg(gdalgname string) {
 			layer.avegradient = newMatrix(layer.size, layer.next.size)
 		} else if gdalgname == Adadelta {
 			layer.rmswupdates = newMatrix(layer.size, layer.next.size)
+		} else if gdalgname == Rprop {
+			layer.wupdates = newMatrix(layer.size, layer.next.size)
 		}
 	}
 }
@@ -241,6 +277,8 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 						weightij = layer.weightij_RMSprop(i, j)
 					case ADAM:
 						weightij = layer.weightij_ADAM(i, j)
+					case Rprop:
+						weightij = layer.weightij_Rprop(i, j)
 					}
 				} else {
 					weightij = layer.weightij(i, j)
@@ -336,6 +374,32 @@ func (layer *NeuLayer) weightij_ADAM(i int, j int) float64 {
 		alpha *= math.Sqrt(1-nn.tunables.beta2_t) / (1 - nn.tunables.beta1_t)
 		weightij = weightij - alpha*layer.avegradient[i][j]/(math.Sqrt(layer.rmsgradient[i][j])+nn.tunables.eps)
 	}
+	return weightij
+}
+
+func (layer *NeuLayer) weightij_Rprop(i int, j int) float64 {
+	nn := layer.nn
+	alpha := nn.tunables.alpha
+	weightij := layer.weights[i][j]
+
+	if layer.wupdates[i][j] == 0 {
+		layer.wupdates[i][j] = math.Abs(alpha * layer.gradient[i][j])
+		weightij = weightij - alpha*layer.gradient[i][j]
+		return weightij
+	}
+	if layer.gradient[i][j] > 0 && layer.pregradient[i][j] > 0 {
+		layer.wupdates[i][j] *= nn.tunables.eta
+	} else if layer.gradient[i][j] < 0 && layer.pregradient[i][j] < 0 {
+		layer.wupdates[i][j] *= nn.tunables.eta
+	} else {
+		layer.wupdates[i][j] *= nn.tunables.neta
+	}
+	if layer.gradient[i][j] > 0 {
+		weightij = weightij - layer.wupdates[i][j]
+	} else {
+		weightij = weightij + layer.wupdates[i][j]
+	}
+
 	return weightij
 }
 

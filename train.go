@@ -21,6 +21,8 @@ const (
 
 type CommandLine struct {
 	tracenumbp int
+	tracecost  bool
+	checkgrads bool
 }
 
 var cli = CommandLine{}
@@ -49,8 +51,12 @@ type TrainParams struct {
 
 func init() {
 	flag.IntVar(&cli.tracenumbp, "nbp", 0, "trace interval")
+	flag.BoolVar(&cli.checkgrads, "grad", false, "check gradients every \"trace interval\"")
+	flag.BoolVar(&cli.tracecost, "cost", false, "trace cost every \"trace interval\"")
 
 	flag.Parse()
+	assert(!cli.checkgrads || cli.tracenumbp > 0)
+	assert(!cli.tracecost || cli.tracenumbp > 0)
 }
 
 func (nn *NeuNetwork) Predict(xvec []float64) []float64 {
@@ -61,6 +67,50 @@ func (nn *NeuNetwork) Predict(xvec []float64) []float64 {
 		nn.callbacks.denormcbY(ynorm)
 	}
 	return ynorm
+}
+
+// feed-forward pass for the same *already stored* input, possibly with different weights
+func (nn *NeuNetwork) reForward() {
+	for l := 1; l <= nn.lastidx; l++ {
+		nn.forwardLayer(nn.layers[l])
+	}
+}
+
+// must be called right after the backprop pass
+// (in other words, assumes all the gradients[][][] to be updated)
+func (nn *NeuNetwork) CheckGradients(yvec []float64) {
+	const eps = 1E-6
+	const eps2 = eps * 2
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		next := layer.next
+		for i := 0; i < layer.size; i++ {
+			for j := 0; j < next.size; j++ {
+				var costplus, costminus float64
+				layer.weights[i][j] += eps
+				nn.reForward()
+				if nn.tunables.costfunction == CostLogistic {
+					costplus = nn.CostLogistic(yvec)
+				} else {
+					costplus = nn.CostLinear(yvec)
+				}
+				layer.weights[i][j] -= eps2
+				nn.reForward()
+				if nn.tunables.costfunction == CostLogistic {
+					costminus = nn.CostLogistic(yvec)
+				} else {
+					costminus = nn.CostLinear(yvec)
+				}
+				layer.weights[i][j] += eps // restore
+				gradij := (costplus - costminus) / eps2
+				diff := math.Abs(gradij - layer.gradient[i][j])
+				if diff > eps2 {
+					log.Print("grad-check-failed", fmt.Sprintf("[%2d->(%2d,%2d)] %.3f", l, i, j, diff))
+				}
+			}
+		}
+
+	}
 }
 
 func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
@@ -100,7 +150,12 @@ Loop:
 			yvec := yvecHelper(xvec, i, p)
 			nn.TrainStep(xvec, yvec)
 			if cli.tracenumbp > 0 && nn.nbackprops%cli.tracenumbp == 0 {
-				trace_cost = true
+				if cli.tracecost {
+					trace_cost = true
+				}
+				if cli.checkgrads {
+					nn.CheckGradients(yvec)
+				}
 			}
 			if p.maxgradnorm > 0 {
 				nn.gradnormHelper(gratrack)

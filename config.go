@@ -24,12 +24,13 @@ const (
 	RegularizeL2 = 1 << 1
 	//
 	// gradient descent non-linear optimization algorithms (e.g., http://sebastianruder.com/optimizing-gradient-descent)
-	// TODO: Nesterov, ADAM, BFGS, and LBFGS
+	// TODO: conjugate gradients (https://en.wikipedia.org/wiki/Conjugate_gradient_method), BFGS, and LBFGS
 	//
 	Adagrad  = "Adagrad"
 	Adadelta = "Adadelta"
 	RMSprop  = "RMSprop"
 	ADAM     = "ADAM"
+	Rprop    = "Rprop"
 	//
 	// cost function
 	//
@@ -48,6 +49,8 @@ const (
 	ADAM_beta1_t = 1
 	ADAM_beta2_t = 1
 	ADAM_eps     = 1E-8
+	Rprop_eta    = 1.2
+	Rprop_neta   = 0.5
 )
 
 // Defaults across all algorithms
@@ -61,15 +64,19 @@ const GDALG_gamma = 0.9
 
 // neural network tunables - a superset
 type NeuTunables struct {
-	alpha          float64 // learning rate, typically 0.01 through 0.1
-	gdalgalpha     float64 // learning rate that is preferred with a specific optimization
-	momentum       float64 // https://en.wikipedia.org/wiki/Stochastic_gradient_descent#Momentum
-	beta1          float64
-	beta2          float64
-	beta1_t        float64
-	beta2_t        float64
-	gamma          float64
-	eps            float64
+	// hyperparameters used by various gradient descent alg-s
+	alpha      float64 // learning rate, typically 0.01 through 0.1
+	gdalgalpha float64 // learning rate that is preferred with a specific optimization
+	momentum   float64 // https://en.wikipedia.org/wiki/Stochastic_gradient_descent#Momentum
+	beta1      float64
+	beta2      float64
+	beta1_t    float64
+	beta2_t    float64
+	gamma      float64
+	eps        float64
+	eta        float64
+	neta       float64
+	// other config
 	costfunction   string // half squared euclidean distance (L2 norm) aka LMS | Logistic
 	gdalgname      string // gradient descent optimization algorithm (see above)
 	gdalgscopeall  bool   // whether to apply optimization algorithm to all layers or just the one facing output
