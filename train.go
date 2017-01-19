@@ -89,23 +89,23 @@ func (nn *NeuNetwork) CheckGradients(yvec []float64) {
 				var costplus, costminus float64
 				layer.weights[i][j] += eps
 				nn.reForward()
-				if nn.tunables.costfunction == CostLogistic {
-					costplus = nn.CostLogistic(yvec)
+				if nn.tunables.costfunction == CostCrossEntropy {
+					costplus = nn.CostCrossEntropy(yvec)
 				} else {
-					costplus = nn.CostLinear(yvec)
+					costplus = nn.CostMse(yvec)
 				}
 				layer.weights[i][j] -= eps2
 				nn.reForward()
-				if nn.tunables.costfunction == CostLogistic {
-					costminus = nn.CostLogistic(yvec)
+				if nn.tunables.costfunction == CostCrossEntropy {
+					costminus = nn.CostCrossEntropy(yvec)
 				} else {
-					costminus = nn.CostLinear(yvec)
+					costminus = nn.CostMse(yvec)
 				}
 				layer.weights[i][j] += eps // restore
 				gradij := (costplus - costminus) / eps2
 				diff := math.Abs(gradij - layer.gradient[i][j])
 				if diff > eps2 {
-					log.Print("grad-check-failed", fmt.Sprintf("[%2d->(%2d,%2d)] %.3f", l, i, j, diff))
+					fmt.Println("grad-check-failed", fmt.Sprintf("[%2d->(%2d,%2d)] %.3f", l, i, j, diff))
 				}
 			}
 		}
@@ -204,18 +204,20 @@ Loop:
 			xvec := Xs[i]
 			yvec := yvecHelper(xvec, i, p)
 			nn.forward(xvec)
-			if nn.tunables.costfunction == CostLogistic {
-				cost += nn.CostLogistic(yvec)
+			if nn.tunables.costfunction == CostCrossEntropy {
+				cost += nn.CostCrossEntropy(yvec)
 			} else {
-				cost += nn.CostLinear(yvec)
+				cost += nn.CostMse(yvec)
 			}
 		}
-		cost /= float64(testingnum)
-		if cost <= p.maxcost {
-			converged |= ConvergedCost
-		}
-		if trace_cost {
-			log.Print(nn.nbackprops, fmt.Sprintf(" c %f", cost))
+		if math.Abs(cost) < math.MaxInt16 {
+			cost /= float64(testingnum)
+			if cost <= p.maxcost {
+				converged |= ConvergedCost
+			}
+			if trace_cost {
+				fmt.Println(nn.nbackprops, fmt.Sprintf(" c %f", cost))
+			}
 		}
 	}
 	// convergence: weights
@@ -340,10 +342,10 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 				for i, xvec := range testingX {
 					yvec := testingY[i]
 					nn.forward(xvec)
-					if nn.tunables.costfunction == CostLogistic {
-						cost += nn.CostLogistic(yvec)
+					if nn.tunables.costfunction == CostCrossEntropy {
+						cost += nn.CostCrossEntropy(yvec)
 					} else {
-						cost += nn.CostLinear(yvec)
+						cost += nn.CostMse(yvec)
 					}
 				}
 				cost /= float64(len(testingX))

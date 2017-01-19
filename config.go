@@ -34,8 +34,8 @@ const (
 	//
 	// cost function
 	//
-	CostLinear   = "LMS"      // least mean squares
-	CostLogistic = "Logistic" // -y*log(h) - (1-y)*log(1-h)
+	CostMse      = "MSE"      // mean squared error
+	CostCrossEntropy = "Logistic" // cross-entropy -(y*log(h) + (1-y)*log(1-h))
 )
 
 //

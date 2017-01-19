@@ -50,7 +50,7 @@ func ExampleF_xorbits() {
 		y1 := nn.Predict(xvec)
 		y2 := xorbits(xvec)
 		err += nn.AbsError(y2)
-		loss += nn.CostLinear(y2)
+		loss += nn.CostMse(y2)
 		a, b, c, d := int(xvec[0]), int(xvec[1]), int(y1[0]), int(y2[0])
 		fmt.Printf("%08b ^ %08b -> %08b : %08b\n", a, b, c, d)
 	}
@@ -68,9 +68,9 @@ func ExampleF_sumsquares() {
 	// NN: input layer of 2 nodes, 2 hidden layers consisting of 16 nodes that utilize tanh(),
 	// and a single-node output layer that uses sigmoid() activation
 	input := NeuLayerConfig{size: 2}
-	hidden := NeuLayerConfig{"tanh", 20}
-	output := NeuLayerConfig{"sigmoid", 1}
-	nn := NewNeuNetwork(input, hidden, 2, output, Adadelta)
+	hidden := NeuLayerConfig{"sigmoid", 16}
+	output := NeuLayerConfig{"identity", 1}
+	nn := NewNeuNetwork(input, hidden, 2, output, Rprop)
 
 	sumsquares := func(xvec []float64) []float64 {
 		var y []float64 = []float64{0}
@@ -86,7 +86,7 @@ func ExampleF_sumsquares() {
 			Xs[i][0] = rand.Float64() / 1.5
 			Xs[i][1] = rand.Float64() / 1.5
 		}
-		converged = nn.Train(Xs, TrainParams{resultvalcb: sumsquares, repeat: 3, testingpct: 30, maxcost: 1E-6})
+		converged = nn.Train(Xs, TrainParams{resultvalcb: sumsquares, repeat: 3, testingpct: 30, maxcost: 5E-7})
 	}
 	// use to estimate
 	var loss float64
@@ -96,16 +96,16 @@ func ExampleF_sumsquares() {
 		xvec[1] = rand.Float64() / 1.5
 		y1 := nn.Predict(xvec)
 		y2 := sumsquares(xvec)
-		loss += nn.CostLinear(y2)
+		loss += nn.CostMse(y2)
 		fmt.Printf("%.3f**2 + %.3f**2 -> %.3f : %.3f\n", xvec[0], xvec[1], y1[0], y2[0])
 	}
-	fmt.Printf("loss %.7f\n", loss/4.0)
+	fmt.Printf("loss %.3e\n", loss/4.0)
 	// Output:
-	// 0.210**2 + 0.050**2 -> 0.042 : 0.046
-	// 0.619**2 + 0.022**2 -> 0.382 : 0.384
-	// 0.409**2 + 0.344**2 -> 0.283 : 0.285
-	// 0.557**2 + 0.448**2 -> 0.512 : 0.511
-	// loss 0.0000033
+	// 0.469**2 + 0.371**2 -> 0.356 : 0.358
+	// 0.472**2 + 0.092**2 -> 0.232 : 0.232
+	// 0.159**2 + 0.621**2 -> 0.411 : 0.411
+	// 0.150**2 + 0.316**2 -> 0.123 : 0.122
+	// loss 8.970e-07
 }
 
 func ExampleF_sumlogarithms() {
@@ -155,7 +155,7 @@ func ExampleF_sumlogarithms() {
 		xvec[1] = rand.Float64()
 		y2 := sumlogarithms(xvec)
 		y1 := nn.Predict(xvec)
-		loss += nn.CostLinear(y2)
+		loss += nn.CostMse(y2)
 		fmt.Printf("log(%.3f) + log(%.3f) -> %.3f : %.3f\n", xvec[0], xvec[1], y1[0], y2[0])
 	}
 	fmt.Printf("loss %.7f\n", loss/4.0)

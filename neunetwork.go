@@ -65,7 +65,7 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 		layer.init(nn)
 	}
 	// default tunables common for all
-	nn.tunables = NeuTunables{alpha: DEFAULT_alpha, momentum: DEFAULT_momentum, batchsize: DEFAULT_batchsize, gdalgname: gdalgname}
+	nn.tunables = NeuTunables{alpha: DEFAULT_alpha, momentum: DEFAULT_momentum, batchsize: DEFAULT_batchsize, gdalgname: gdalgname, costfunction: CostMse}
 
 	// algorithm-specific default hyperparams
 	nn.initgdalg(nn.tunables.gdalgname)
@@ -125,19 +125,17 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 	layer.rmsgradient = newMatrix(layer.size, layer.next.size)
 }
 
-func (nn *NeuNetwork) reinitWeights() {
-	u := math.Sqrt(float64(nn.lastidx*2)) / math.Sqrt(float64(nn.cinput.size+nn.coutput.size))
+// Xavier et al at http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
+func (nn *NeuNetwork) initXavier() {
+	qsix := math.Sqrt(6)
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		next := layer.next
+		u := qsix / float64(layer.size+next.size)
+		d := u * 2
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
-				r := rand.Float64()
-				if r >= 0.5 {
-					layer.weights[i][j] = r * u
-				} else {
-					layer.weights[i][j] = (r - 1) * u
-				}
+				layer.weights[i][j] = d*rand.Float64() - u
 			}
 		}
 	}
@@ -205,17 +203,29 @@ func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
 // see for instance https://web.stanford.edu/class/cs294a/sparseAutoencoder_2011new.pdf
 func (nn *NeuNetwork) backprop(yvec []float64) {
 	assert(len(yvec) == nn.coutput.size)
+	assert(nn.tunables.costfunction == CostMse || nn.tunables.costfunction == CostCrossEntropy, "NIY: delta rule for the spec-ed cost")
 	nn.nbackprops++
 	//
-	// compute deltas while moving from the output layer back to the input
+	// delta rules
 	//
 	outputL := nn.layers[nn.lastidx]
 	actF := activations[outputL.config.actfname]
-	for i := 0; i < nn.coutput.size; i++ {
-		if actF.dfy != nil {
-			outputL.deltas[i] = actF.dfy(outputL.avec[i]) * (outputL.avec[i] - yvec[i])
-		} else {
-			outputL.deltas[i] = actF.dfx(outputL.zvec[i]) * (outputL.avec[i] - yvec[i])
+	if nn.tunables.costfunction == CostCrossEntropy && outputL.config.actfname == "sigmoid" {
+		for i := 0; i < nn.coutput.size; i++ {
+			outputL.deltas[i] = yvec[i] - outputL.avec[i]
+		}
+	} else {
+		for i := 0; i < nn.coutput.size; i++ {
+			if nn.tunables.costfunction == CostCrossEntropy {
+				outputL.deltas[i] = (yvec[i] - outputL.avec[i]) / (outputL.avec[i] * (1 - outputL.avec[i]))
+			} else {
+				outputL.deltas[i] = outputL.avec[i] - yvec[i]
+			}
+			if actF.dfy != nil {
+				outputL.deltas[i] *= actF.dfy(outputL.avec[i])
+			} else {
+				outputL.deltas[i] *= actF.dfx(outputL.zvec[i])
+			}
 		}
 	}
 	for l := nn.lastidx - 1; l > 0; l-- {
@@ -407,7 +417,7 @@ func (layer *NeuLayer) weightij_Rprop(i int, j int) float64 {
 // cost and loss helper functions; in all 3 the yvec is true value
 // assumption/requirement therefore: called after the corresponding feed-forward step
 //
-func (nn *NeuNetwork) CostLinear(yvec []float64) float64 {
+func (nn *NeuNetwork) CostMse(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
 	var ynorm []float64 = yvec
 	if nn.callbacks.normcbY != nil {
@@ -418,7 +428,7 @@ func (nn *NeuNetwork) CostLinear(yvec []float64) float64 {
 	return normL2VectorSquared(ynorm, outputL.avec) / 2
 }
 
-func (nn *NeuNetwork) CostLogistic(yvec []float64) float64 {
+func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
 	var ynorm []float64 = yvec
 	if nn.callbacks.normcbY != nil {

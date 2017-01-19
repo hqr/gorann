@@ -20,6 +20,7 @@ var activations map[string]*Activation
 func init() {
 	RegisterActivation(&Activation{"sigmoid", sigmoid, dsigmoid, nil})
 	RegisterActivation(&Activation{"tanh", tanh, dtanh, nil})
+	RegisterActivation(&Activation{"identity", identity, didentity, nil})
 	RegisterActivation(&Activation{"relu", relu, nil, drelu})
 	RegisterActivation(&Activation{"leakyrelu", leakyrelu, nil, dleakyrelu})
 	RegisterActivation(&Activation{"softplus", softplus, nil, dsoftplus})
@@ -48,6 +49,14 @@ func tanh(x float64) float64 {
 
 func dtanh(y float64) float64 {
 	return 1 - y*y
+}
+
+func identity(x float64) float64 {
+	return x
+}
+
+func didentity(y float64) float64 {
+	return 1
 }
 
 func relu(x float64) float64 {
