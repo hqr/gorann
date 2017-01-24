@@ -212,12 +212,12 @@ func (nn *NeuNetwork) backprop(yvec []float64) {
 	actF := activations[outputL.config.actfname]
 	if nn.tunables.costfunction == CostCrossEntropy && outputL.config.actfname == "sigmoid" {
 		for i := 0; i < nn.coutput.size; i++ {
-			outputL.deltas[i] = yvec[i] - outputL.avec[i]
+			outputL.deltas[i] = outputL.avec[i] - yvec[i]
 		}
 	} else {
 		for i := 0; i < nn.coutput.size; i++ {
 			if nn.tunables.costfunction == CostCrossEntropy {
-				outputL.deltas[i] = (yvec[i] - outputL.avec[i]) / (outputL.avec[i] * (1 - outputL.avec[i]))
+				outputL.deltas[i] = (outputL.avec[i] - yvec[i]) / (outputL.avec[i] * (1 - outputL.avec[i]))
 			} else {
 				outputL.deltas[i] = outputL.avec[i] - yvec[i]
 			}
@@ -438,7 +438,20 @@ func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {
 	var err float64
 	outputL := nn.layers[nn.lastidx]
 	for i := 0; i < len(ynorm); i++ {
-		costi := ynorm[i]*math.Log(outputL.avec[i]) + (1-ynorm[i])*math.Log(1-outputL.avec[i])
+		costi := 0.0
+		a := outputL.avec[i]
+		if math.Abs(a) < ADAM_eps {
+			a = ADAM_eps
+		} else if math.Abs(a-1) < ADAM_eps {
+			a = 1 - ADAM_eps
+		}
+		if math.Abs(ynorm[i]-1) < ADAM_eps {
+			costi = math.Log(a)
+		} else if math.Abs(ynorm[i]) < ADAM_eps {
+			costi = math.Log(1 - a)
+		} else {
+			costi = ynorm[i]*math.Log(a) + (1-ynorm[i])*math.Log(1-a)
+		}
 		err += costi
 	}
 	return -err / 2

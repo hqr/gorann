@@ -8,56 +8,51 @@ import (
 
 func Test_bitoutput(t *testing.T) {
 	rand.Seed(0)
-	input := NeuLayerConfig{size: 2}
-	hidden := NeuLayerConfig{"tanh", 8}
+	input := NeuLayerConfig{size: 16}
+	hidden := NeuLayerConfig{"sigmoid", 16}
 	output := NeuLayerConfig{"sigmoid", 8}
-	nn := NewNeuNetwork(input, hidden, 2, output, RMSprop)
-	nn.tunables.costfunction = CostMse
+	nn := NewNeuNetwork(input, hidden, 3, output, RMSprop)
+	nn.initXavier()
 
-	maxint := int32(255)
-	normalize := func(vec []float64) {
-		divElemVector(vec, float64(maxint))
-	}
-	nn.callbacks = NeuCallbacks{normcbX: normalize}
 	xor8bits := func(xvec []float64) []float64 {
 		var y []float64 = make([]float64, 8)
-		result := int(xvec[0]) ^ int(xvec[1])
-		mask := 1
 		for i := 0; i < 8; i++ {
-			if result&mask > 0 {
-				y[7-i] = 1
-			}
-			mask <<= 1
+			y[i] = float64(int(xvec[i]) ^ int(xvec[8+i]))
 		}
 		return y
 	}
-	Xs := newMatrix(16, 2)
+	Xs := newMatrix(1000, 16)
 	for i := 0; i < len(Xs); i++ {
-		Xs[i][0] = float64(rand.Int31n(maxint))
-		Xs[i][1] = float64(rand.Int31n(maxint))
+		const maxint = int32(0xffff)
+		x := rand.Int31n(maxint)
+		for j := 0; j < 16; j++ {
+			Xs[i][j] = float64(x & 1)
+			x >>= 1
+		}
 	}
 	converged := 0
 	for converged == 0 {
-		converged = nn.Train(Xs, TrainParams{resultvalcb: xor8bits, testingpct: 50, maxcost: 1E-1, maxbackprops: 1E6})
+		converged = nn.Train(Xs, TrainParams{resultvalcb: xor8bits, testingpct: 50, maxcost: 0.3, maxbackprops: 1E6})
 	}
 	if converged&ConvergedMaxBackprops > 0 {
 		t.Errorf("reached the maximum number of back propagations (%d)\n", nn.nbackprops)
 	}
-	var loss float64
+	var crossen, mse float64
 	for k := 0; k < 4; k++ {
 		i := int(rand.Int31n(int32(len(Xs))))
 		xvec := Xs[i]
-		y2 := xor8bits(xvec)
-		y1 := nn.Predict(xvec)
-		for j := 0; j < len(y1); j++ {
-			loss += nn.CostMse(y2) // CostCrossEntropy
-			if y1[j] < 0.3 {
-				y1[j] = 0
-			} else if y1[j] > 0.7 {
-				y1[j] = 1
+		yvec := xor8bits(xvec)
+		avec := nn.Predict(xvec)
+		crossen += nn.CostCrossEntropy(yvec)
+		mse += nn.CostMse(yvec)
+		for i := 0; i < 8; i++ {
+			if avec[i] < 0.4 {
+				avec[i] = 0
+			} else if avec[i] > 0.6 {
+				avec[i] = 1
 			}
 		}
-		fmt.Printf("%08b ^ %08b -> %.1v : %v\n", int(xvec[0]), int(xvec[1]), y1, y2)
+		fmt.Printf("%v ^ %v -> %.1v : %v\n", xvec[:8], xvec[8:], avec, yvec)
 	}
-	fmt.Println("loss", loss/4)
+	fmt.Printf("cross-entropy %.5f, mse %.5f\n", crossen/4, mse/4)
 }

@@ -40,27 +40,73 @@ func ExampleF_xorbits() {
 			Xs[i][0] = float64(rand.Int31n(maxint))
 			Xs[i][1] = float64(rand.Int31n(maxint))
 		}
-		converged = nn.Train(Xs, TrainParams{resultvalcb: xorbits, repeat: 3, testingpct: 60, maxcost: 1E-3})
+		converged = nn.Train(Xs, TrainParams{resultvalcb: xorbits, repeat: 3, testingpct: 60, maxcost: 1E-3, maxbackprops: 1E7})
 	}
 	// test and print the results (expected output below)
-	var err, loss float64
+	var crossen, mse float64
 	for k := 0; k < 4; k++ {
 		i := int(rand.Int31n(int32(len(Xs))))
 		xvec := Xs[i]
 		y1 := nn.Predict(xvec)
 		y2 := xorbits(xvec)
-		err += nn.AbsError(y2)
-		loss += nn.CostMse(y2)
+		crossen += nn.CostCrossEntropy(y2)
+		mse += nn.CostMse(y2)
 		a, b, c, d := int(xvec[0]), int(xvec[1]), int(y1[0]), int(y2[0])
 		fmt.Printf("%08b ^ %08b -> %08b : %08b\n", a, b, c, d)
 	}
-	fmt.Printf("error %d, loss %.5f\n", int(err)/4, loss/4)
+	fmt.Printf("cross-entropy %.5f, mse %.5f\n", crossen/4, mse/4)
 	// Output:
 	// 10010001 ^ 01101100 -> 11111001 : 11111101
 	// 01101101 ^ 10011110 -> 11101111 : 11110011
 	// 11001011 ^ 11011110 -> 00011000 : 00010101
 	// 10111101 ^ 00000011 -> 10111101 : 10111110
 	// error 2, loss 0.00006
+}
+
+func ExampleF_1() {
+	rand.Seed(0) // for reproducible results
+
+	// NN: input layer of 2 nodes, 2 hidden layers consisting of 16 nodes
+	// and a single-node output layer that uses sigmoid() activation
+	input := NeuLayerConfig{size: 2}
+	hidden := NeuLayerConfig{"sigmoid", 4}
+	output := NeuLayerConfig{"sigmoid", 1}
+	nn := NewNeuNetwork(input, hidden, 2, output, ADAM)
+	nn.tunables.alpha = 0.4
+	nn.tunables.costfunction = CostCrossEntropy
+
+	xorbits := func(xvec []float64) []float64 {
+		var y []float64 = []float64{0}
+		a := int(xvec[0])
+		b := int(xvec[1])
+		y[0] = float64(a ^ b)
+		return y
+	}
+	Xs := newMatrix(100, 2)
+	converged := 0
+	for i := 0; i < len(Xs); i++ {
+		Xs[i][0] = float64(rand.Int31n(2))
+		Xs[i][1] = float64(rand.Int31n(2))
+	}
+	for converged == 0 {
+		converged = nn.Train(Xs, TrainParams{resultvalcb: xorbits, testingpct: 90, maxbackprops: 2E5})
+	}
+	// test and print the results (expected output below)
+	var err, loss float64
+	Xs = [][]float64{{0.0, 0.0}, {0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0}}
+	for _, xvec := range Xs {
+		y1 := nn.Predict(xvec)
+		y2 := xorbits(xvec)
+		err += nn.AbsError(y2)
+		loss += nn.CostCrossEntropy(y2)
+		a, b, c, d := int(xvec[0]), int(xvec[1]), y1[0], int(y2[0])
+		fmt.Printf("%01b ^ %01b -> %.1f : %01b\n", a, b, c, d)
+	}
+	// Output:
+	// 0 ^ 0 -> 0.0 : 0
+	// 0 ^ 1 -> 1.0 : 1
+	// 1 ^ 0 -> 1.0 : 1
+	// 1 ^ 1 -> 0.0 : 0
 }
 
 func ExampleF_sumsquares() {

@@ -74,7 +74,7 @@ func drelu(x float64) float64 {
 }
 
 // aka parametric Rectifier
-const LeakyApha = 1E-4
+const LeakyApha = 1E-2
 
 func leakyrelu(x float64) float64 {
 	if x < 0 {
