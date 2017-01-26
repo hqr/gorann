@@ -95,7 +95,42 @@ func (nn *NeuNetwork) CheckGradients(yvec []float64) {
 				gradij := (costplus - costminus) / eps2
 				diff := math.Abs(gradij - layer.gradient[i][j])
 				if diff > eps2 {
-					log.Print("grad-check-failed", fmt.Sprintf("[%2d->(%2d,%2d)] %.3f", l, i, j, diff))
+					log.Print("grad-check-failed", fmt.Sprintf("[%2d=>(%2d->%2d)] %.4e", l, i, j, diff))
+				}
+			}
+		}
+
+	}
+}
+
+func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, p TrainParams, idxbase int) {
+	assert(len(xbatch) == batchsize)
+	const eps = DEFAULT_eps
+	const eps2 = eps * 2
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		next := layer.next
+		for i := 0; i < layer.size; i++ {
+			for j := 0; j < next.size; j++ {
+				var costplus, costminus float64
+				for k := 0; k < batchsize; k++ {
+					xvec := xbatch[k]
+					yvec := yvecHelper(xvec, idxbase+k, p)
+
+					layer.weights[i][j] += eps
+					nn.forward(xvec)
+					costplus += nn.costfunction(yvec)
+
+					layer.weights[i][j] -= eps2
+					nn.reForward()
+					costminus += nn.costfunction(yvec)
+
+					layer.weights[i][j] += eps // restore
+				}
+				gradij := (costplus - costminus) / float64(batchsize) / eps2
+				diff := math.Abs(gradij - layer.gradient[i][j])
+				if diff > eps2 {
+					log.Print("grad-batch-failed", fmt.Sprintf("[%2d=>(%2d->%2d)] %.4e", l, i, j, diff))
 				}
 			}
 		}
@@ -125,9 +160,6 @@ func (nn *NeuNetwork) TrainSet(Xs [][]float64, p TrainParams, gratrack []float64
 	for i, xvec := range Xs {
 		yvec := yvecHelper(xvec, i, p)
 		nn.TrainStep(xvec, yvec)
-		if cli.tracenumbp > 0 && nn.nbackprops%cli.tracenumbp == 0 && cli.checkgrads && batchsize == 1 {
-			nn.CheckGradients(yvec)
-		}
 		bi++
 		if bi >= batchsize {
 			if p.maxgradnorm > 0 {
@@ -137,7 +169,17 @@ func (nn *NeuNetwork) TrainSet(Xs [][]float64, p TrainParams, gratrack []float64
 			if p.maxweightdelta > 0 {
 				prew = nn.weightdeltaBefore()
 			}
-			nn.fixWeights(batchsize) // <==============
+
+			nn.fixGradients(batchsize) // <============== (1)
+			if cli.checkgrads && (cli.tracenumbp > 0 && nn.nbackprops%cli.tracenumbp == 0) {
+				if batchsize == 1 {
+					nn.CheckGradients(yvec)
+				} else {
+					nn.CheckGradients_Batch(Xs[i-batchsize+1:i+1], batchsize, p, i-batchsize+1)
+				}
+			}
+			nn.fixWeights(batchsize) // <============== (2)
+
 			if p.maxweightdelta > 0 {
 				nn.weightdeltaAfter(weitrack, prew)
 			}
@@ -182,15 +224,13 @@ func (nn *NeuNetwork) Train(Xs [][]float64, p TrainParams) int {
 	m := len(Xs)
 	assert(p.resultset == nil || len(p.resultset) == m)
 	assert(p.resultset != nil || p.resultvalcb != nil || p.resultidxcb != nil)
-	if cli.checkgrads {
-		assert(nn.tunables.batchsize == 1, "NIY: cannot compute gradients for batchsize > 1")
-	}
+
+	var weitrack []float64 = newVector(10) // L2 norm(previous-weights - current-weights)
+	var gratrack []float64 = newVector(10) // L2 norm(gradient)
 	repeat := max(p.repeat, 1)
-	// the last so-many L2 norm(previous-weights - current-weights) and L2norm(gradient)
-	var weitrack []float64 = newVector(10)
-	var gratrack []float64 = newVector(10)
 	converged := 0
 	nbp := nn.nbackprops
+	// do the training
 	for k := 0; k < repeat && converged == 0; k++ {
 		converged = nn.TrainSet(Xs, p, gratrack, weitrack)
 	}

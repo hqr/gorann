@@ -149,13 +149,12 @@ func ExampleF_sumsquares() {
 }
 
 func ExampleF_sumlogarithms() {
-	rand.Seed(0)
+	rand.Seed(1)
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"tanh", 8}
 	output := NeuLayerConfig{"tanh", 1}
 	nn := NewNeuNetwork(input, hidden, 5, output, RMSprop)
-	nn.tunables.momentum = 0.5
-	nn.tunables.batchsize = 50
+	nn.tunables.batchsize = 10
 
 	normalize := func(vec []float64) {
 		divElemVector(vec, float64(-8))
@@ -178,7 +177,7 @@ func ExampleF_sumlogarithms() {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
 		}
-		converged = nn.Train(Xs, TrainParams{resultvalcb: sumlogarithms, repeat: 3, maxcost: 1E-5, maxgradnorm: 0.01, maxbackprops: 4E6})
+		converged = nn.Train(Xs, TrainParams{resultvalcb: sumlogarithms, repeat: 3, maxcost: 1E-5, maxbackprops: 1E6})
 	}
 	if converged&ConvergedMaxBackprops > 0 {
 		fmt.Printf("maxed out on back propagations %d\n", nn.nbackprops)
@@ -195,9 +194,9 @@ func ExampleF_sumlogarithms() {
 	}
 	fmt.Printf("mse %.4e\n", mse/4)
 	// Output:
-	// log(0.250) + log(0.829) -> -1.589 : -1.574
-	// log(0.637) + log(0.920) -> -0.575 : -0.535
-	// log(0.840) + log(0.585) -> -0.745 : -0.711
-	// log(0.571) + log(0.962) -> -0.638 : -0.599
-	// mse 8.7610e-06
+	// log(0.304) + log(0.288) -> -2.427 : -2.437
+	// log(0.431) + log(0.037) -> -4.205 : -4.134
+	// log(0.519) + log(0.767) -> -0.925 : -0.921
+	// log(0.834) + log(0.322) -> -1.332 : -1.315
+	// mse 1.0427e-05
 }

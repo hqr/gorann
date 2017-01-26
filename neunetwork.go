@@ -256,15 +256,19 @@ func (nn *NeuNetwork) backprop(yvec []float64) {
 }
 
 //
-// apply changes resulted from back propagation and accumulated in gradient[][]
+// step 1 applying changes resulted from back propagation and accumulated in the gradient[][]s
 //
-func (nn *NeuNetwork) fixWeights(batchsize int) {
-	if batchsize != BatchSGD {
+func (nn *NeuNetwork) fixGradients(batchsize int) {
+	if batchsize > 1 {
 		for l := 0; l < nn.lastidx; l++ {
 			layer := nn.layers[l]
 			divElemMatrix(layer.gradient, float64(batchsize))
 		}
 	}
+}
+
+// step 2 --/--/--
+func (nn *NeuNetwork) fixWeights(batchsize int) {
 	if nn.tunables.gdalgname == ADAM {
 		nn.tunables.beta1_t *= nn.tunables.beta1
 		nn.tunables.beta2_t *= nn.tunables.beta2
