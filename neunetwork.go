@@ -153,10 +153,10 @@ func (nn *NeuNetwork) initgdalg(gdalgname string) {
 		nn.tunables.eta = Rprop_eta
 		nn.tunables.neta = Rprop_neta
 	} else if gdalgname == Adagrad {
-		nn.tunables.eps = GDALG_eps
+		nn.tunables.eps = DEFAULT_eps
 	} else if gdalgname == Adadelta || gdalgname == RMSprop {
-		nn.tunables.eps = GDALG_eps
-		nn.tunables.gamma = GDALG_gamma
+		nn.tunables.eps = DEFAULT_eps
+		nn.tunables.gamma = DEFAULT_gamma
 	}
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
@@ -293,8 +293,9 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 				} else {
 					weightij = layer.weightij(i, j)
 				}
-				if l == nn.lastidx-1 && nn.tunables.regularization > 0 {
-					weightij -= 0.01 * layer.weights[i][j]
+				// regularization
+				if nn.tunables.lambda > 0 && i < layer.config.size {
+					weightij -= nn.tunables.lambda * layer.weights[i][j] / float64(batchsize)
 				}
 				layer.weights[i][j] = weightij
 				layer.pregradient[i][j] = layer.gradient[i][j]
@@ -413,9 +414,18 @@ func (layer *NeuLayer) weightij_Rprop(i int, j int) float64 {
 	return weightij
 }
 
+func (nn *NeuNetwork) costfunction(yvec []float64) (cost float64) {
+	if nn.tunables.costfunction == CostCrossEntropy {
+		cost = nn.CostCrossEntropy(yvec)
+	} else {
+		cost = nn.CostMse(yvec)
+	}
+	return
+}
+
 //
-// cost and loss helper functions; in all 3 the yvec is true value
-// assumption/requirement therefore: called after the corresponding feed-forward step
+// cost helpers: the yvec is true (training) value
+// must be called after the corresponding feed-forward step
 //
 func (nn *NeuNetwork) CostMse(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
@@ -426,6 +436,24 @@ func (nn *NeuNetwork) CostMse(yvec []float64) float64 {
 	}
 	outputL := nn.layers[nn.lastidx]
 	return normL2VectorSquared(ynorm, outputL.avec) / 2
+}
+
+// the "L2 regularization" part of the cost
+func (nn *NeuNetwork) CostL2RegPart(yvec []float64) (creg float64) {
+	if nn.tunables.lambda == 0 {
+		return
+	}
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		next := layer.next
+		for i := 0; i < layer.config.size; i++ {
+			for j := 0; j < next.size; j++ {
+				creg += math.Pow(layer.weights[i][j], 2)
+			}
+		}
+	}
+	creg = nn.tunables.lambda * creg / 2
+	return
 }
 
 func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {

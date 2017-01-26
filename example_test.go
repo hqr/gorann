@@ -8,14 +8,13 @@ import (
 
 func ExampleF_xorbits() {
 	rand.Seed(0) // for reproducible results
-
-	// NN: input layer of 2 nodes, 2 hidden layers consisting of 16 nodes
-	// and a single-node output layer that uses sigmoid() activation
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"sigmoid", 16}
 	output := NeuLayerConfig{"sigmoid", 1}
 	nn := NewNeuNetwork(input, hidden, 2, output, ADAM)
 	nn.tunables.alpha = 0.4
+	// nn.tunables.batchsize = 10
+	// nn.tunables.lambda = DEFAULT_lambda
 
 	maxint := int32(0xff)
 	normalize := func(vec []float64) {
@@ -60,14 +59,11 @@ func ExampleF_xorbits() {
 	// 01101101 ^ 10011110 -> 11101111 : 11110011
 	// 11001011 ^ 11011110 -> 00011000 : 00010101
 	// 10111101 ^ 00000011 -> 10111101 : 10111110
-	// error 2, loss 0.00006
+	// cross-entropy 0.13692, mse 0.00006
 }
 
 func ExampleF_1() {
 	rand.Seed(0) // for reproducible results
-
-	// NN: input layer of 2 nodes, 2 hidden layers consisting of 16 nodes
-	// and a single-node output layer that uses sigmoid() activation
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"sigmoid", 4}
 	output := NeuLayerConfig{"sigmoid", 1}
@@ -89,7 +85,7 @@ func ExampleF_1() {
 		Xs[i][1] = float64(rand.Int31n(2))
 	}
 	for converged == 0 {
-		converged = nn.Train(Xs, TrainParams{resultvalcb: xorbits, testingpct: 90, maxbackprops: 2E5})
+		converged = nn.Train(Xs, TrainParams{resultvalcb: xorbits, testingpct: 90, maxcost: 1E-8, maxbackprops: 1E6})
 	}
 	// test and print the results (expected output below)
 	var err, loss float64
@@ -111,8 +107,6 @@ func ExampleF_1() {
 
 func ExampleF_sumsquares() {
 	rand.Seed(0)
-	// NN: input layer of 2 nodes, 2 hidden layers consisting of 16 nodes that utilize tanh(),
-	// and a single-node output layer that uses sigmoid() activation
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"sigmoid", 16}
 	output := NeuLayerConfig{"identity", 1}
@@ -125,7 +119,7 @@ func ExampleF_sumsquares() {
 		}
 		return y
 	}
-	Xs := newMatrix(100, 2)
+	Xs := newMatrix(1000, 2)
 	converged := 0
 	for converged == 0 {
 		for i := 0; i < len(Xs); i++ {
@@ -147,23 +141,21 @@ func ExampleF_sumsquares() {
 	}
 	fmt.Printf("loss %.3e\n", loss/4.0)
 	// Output:
-	// 0.469**2 + 0.371**2 -> 0.356 : 0.358
-	// 0.472**2 + 0.092**2 -> 0.232 : 0.232
-	// 0.159**2 + 0.621**2 -> 0.411 : 0.411
-	// 0.150**2 + 0.316**2 -> 0.123 : 0.122
-	// loss 8.970e-07
+	// 0.178**2 + 0.127**2 -> 0.049 : 0.048
+	// 0.550**2 + 0.547**2 -> 0.604 : 0.602
+	// 0.565**2 + 0.373**2 -> 0.459 : 0.458
+	// 0.144**2 + 0.210**2 -> 0.066 : 0.065
+	// loss 1.067e-06
 }
 
 func ExampleF_sumlogarithms() {
-	rand.Seed(1)
-	// NN: input layer of 2 nodes, 4 hidden layers consisting of 8 tanh() nodes
-	// and a single-node output using sigmoid() activation
+	rand.Seed(0)
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"tanh", 8}
 	output := NeuLayerConfig{"tanh", 1}
 	nn := NewNeuNetwork(input, hidden, 5, output, RMSprop)
 	nn.tunables.momentum = 0.5
-	nn.tunables.batchsize = 10
+	nn.tunables.batchsize = 50
 
 	normalize := func(vec []float64) {
 		divElemVector(vec, float64(-8))
@@ -182,33 +174,30 @@ func ExampleF_sumlogarithms() {
 	}
 	Xs := newMatrix(100, 2)
 	var converged int
-	for converged&ConvergedWeight == 0 || converged&ConvergedGradient == 0 {
+	for converged == 0 {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
 		}
-		converged = nn.Train(Xs, TrainParams{resultvalcb: sumlogarithms, repeat: 3, maxweightdelta: 0.005, maxgradnorm: 0.01, maxbackprops: 4E6})
-		if converged&ConvergedMaxBackprops > 0 {
-			fmt.Printf("maxed out back propagations %d\n", nn.nbackprops)
-			break
-		}
+		converged = nn.Train(Xs, TrainParams{resultvalcb: sumlogarithms, repeat: 3, maxcost: 1E-5, maxgradnorm: 0.01, maxbackprops: 4E6})
 	}
-
-	// use to estimate
-	var loss float64
+	if converged&ConvergedMaxBackprops > 0 {
+		fmt.Printf("maxed out on back propagations %d\n", nn.nbackprops)
+	}
+	var mse float64
 	for i := 0; i < 4; i++ {
 		var xvec []float64 = []float64{0, 0}
 		xvec[0] = rand.Float64()
 		xvec[1] = rand.Float64()
 		y2 := sumlogarithms(xvec)
 		y1 := nn.Predict(xvec)
-		loss += nn.CostMse(y2)
+		mse += nn.CostMse(y2)
 		fmt.Printf("log(%.3f) + log(%.3f) -> %.3f : %.3f\n", xvec[0], xvec[1], y1[0], y2[0])
 	}
-	fmt.Printf("loss %.7f\n", loss/4.0)
+	fmt.Printf("mse %.4e\n", mse/4)
 	// Output:
-	// log(0.080) + log(0.501) -> -3.197 : -3.214
-	// log(0.732) + log(0.679) -> -0.717 : -0.699
-	// log(0.303) + log(0.584) -> -1.735 : -1.733
-	// log(0.445) + log(0.350) -> -1.851 : -1.861
-	// loss 0.0000014
+	// log(0.250) + log(0.829) -> -1.589 : -1.574
+	// log(0.637) + log(0.920) -> -0.575 : -0.535
+	// log(0.840) + log(0.585) -> -0.745 : -0.711
+	// log(0.571) + log(0.962) -> -0.638 : -0.599
+	// mse 8.7610e-06
 }

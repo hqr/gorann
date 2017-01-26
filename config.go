@@ -11,17 +11,10 @@ type NeuCallbacks struct {
 	denormcbY func(vec []float64)
 }
 
-// global configuration and per network instance defaults
+// gradient descent enums
 const (
-	// gradient descent: batching and mini-batching
 	BatchSGD         = 1
 	BatchTrainingSet = -1
-	//
-	// regularization ("bias vs. overfitting")
-	//
-	Lambda       = 0.0
-	RegularizeL1 = 1 << 0
-	RegularizeL2 = 1 << 1
 	//
 	// gradient descent non-linear optimization algorithms (e.g., http://sebastianruder.com/optimizing-gradient-descent)
 	// TODO: conjugate gradients (https://en.wikipedia.org/wiki/Conjugate_gradient_method), BFGS, and LBFGS
@@ -34,8 +27,8 @@ const (
 	//
 	// cost function
 	//
-	CostMse      = "MSE"      // mean squared error
-	CostCrossEntropy = "Logistic" // cross-entropy -(y*log(h) + (1-y)*log(1-h))
+	CostMse          = "MSE"          // mean squared error
+	CostCrossEntropy = "CrossEntropy" // -(y*log(h) + (1-y)*log(1-h))
 )
 
 //
@@ -53,14 +46,16 @@ const (
 	Rprop_neta   = 0.5
 )
 
-// Defaults across all algorithms
-const DEFAULT_batchsize = BatchSGD
-const DEFAULT_alpha = 0.01
-const DEFAULT_momentum = 0.6
-
-// Defaults for: Adagrad, Adadelta, RMSprop
-const GDALG_eps = 1E-5
-const GDALG_gamma = 0.9
+// default hyper-parameters
+const (
+	DEFAULT_batchsize = BatchSGD
+	DEFAULT_alpha     = 0.01 // learning rate
+	DEFAULT_momentum  = 0.6  // momentum
+	DEFAULT_lambda    = 0.01 // regularization
+	// Adagrad, Adadelta, RMSprop
+	DEFAULT_eps   = 1E-5
+	DEFAULT_gamma = 0.9
+)
 
 // neural network tunables - a superset
 type NeuTunables struct {
@@ -76,10 +71,10 @@ type NeuTunables struct {
 	eps        float64
 	eta        float64
 	neta       float64
+	lambda     float64 // regularization lambda (default = 0)
 	// other config
-	costfunction   string // half squared euclidean distance (L2 norm) aka LMS | Logistic
-	gdalgname      string // gradient descent optimization algorithm (see above)
-	gdalgscopeall  bool   // whether to apply optimization algorithm to all layers or just the one facing output
-	batchsize      int    // gradient descent: BatchSGD | BatchTrainingSet | minibatch
-	regularization int
+	costfunction  string // half squared euclidean distance (L2 norm) aka LMS | Logistic
+	gdalgname     string // gradient descent optimization algorithm (see above)
+	gdalgscopeall bool   // whether to apply optimization algorithm to all layers or just the one facing output
+	batchsize     int    // gradient descent: BatchSGD | BatchTrainingSet | minibatch
 }

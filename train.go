@@ -15,7 +15,6 @@ const (
 	ConvergedCost = 1 << iota
 	ConvergedWeight
 	ConvergedGradient
-	ConvergedMaxIterations
 	ConvergedMaxBackprops
 )
 
@@ -44,9 +43,7 @@ type TrainParams struct {
 	maxgradnorm    float64 // L2 norm(gradient)
 	maxcost        float64 // average cost-function(testing-set)
 	maxerror       float64 // average L1 norm || yvec - predicted-yvec ||
-	// max counts
-	maxiterations int // max iterations on the given trainging set
-	maxbackprops  int // max total number of back propagations
+	maxbackprops   int     // max number of back propagations
 }
 
 func init() {
@@ -79,33 +76,26 @@ func (nn *NeuNetwork) reForward() {
 // must be called right after the backprop pass
 // (in other words, assumes all the gradients[][][] to be updated)
 func (nn *NeuNetwork) CheckGradients(yvec []float64) {
-	const eps = 1E-6
+	const eps = DEFAULT_eps
 	const eps2 = eps * 2
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		next := layer.next
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
-				var costplus, costminus float64
 				layer.weights[i][j] += eps
 				nn.reForward()
-				if nn.tunables.costfunction == CostCrossEntropy {
-					costplus = nn.CostCrossEntropy(yvec)
-				} else {
-					costplus = nn.CostMse(yvec)
-				}
+				costplus := nn.costfunction(yvec)
+
 				layer.weights[i][j] -= eps2
 				nn.reForward()
-				if nn.tunables.costfunction == CostCrossEntropy {
-					costminus = nn.CostCrossEntropy(yvec)
-				} else {
-					costminus = nn.CostMse(yvec)
-				}
+				costminus := nn.costfunction(yvec)
+
 				layer.weights[i][j] += eps // restore
 				gradij := (costplus - costminus) / eps2
 				diff := math.Abs(gradij - layer.gradient[i][j])
 				if diff > eps2 {
-					fmt.Println("grad-check-failed", fmt.Sprintf("[%2d->(%2d,%2d)] %.3f", l, i, j, diff))
+					log.Print("grad-check-failed", fmt.Sprintf("[%2d->(%2d,%2d)] %.3f", l, i, j, diff))
 				}
 			}
 		}
@@ -126,122 +116,110 @@ func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
 	nn.backprop(ynorm)
 }
 
+func (nn *NeuNetwork) TrainSet(Xs [][]float64, p TrainParams, gratrack []float64, weitrack []float64) (converged int) {
+	m := len(Xs)
+	batchsize, bi := nn.tunables.batchsize, 0
+	if batchsize < 0 || batchsize > m {
+		batchsize = m
+	}
+	for i, xvec := range Xs {
+		yvec := yvecHelper(xvec, i, p)
+		nn.TrainStep(xvec, yvec)
+		if cli.tracenumbp > 0 && nn.nbackprops%cli.tracenumbp == 0 && cli.checkgrads && batchsize == 1 {
+			nn.CheckGradients(yvec)
+		}
+		bi++
+		if bi >= batchsize {
+			if p.maxgradnorm > 0 {
+				nn.gradnormHelper(gratrack)
+			}
+			var prew [][]float64
+			if p.maxweightdelta > 0 {
+				prew = nn.weightdeltaBefore()
+			}
+			nn.fixWeights(batchsize) // <==============
+			if p.maxweightdelta > 0 {
+				nn.weightdeltaAfter(weitrack, prew)
+			}
+			bi = 0
+			if i+batchsize >= m {
+				batchsize = m - i - 1
+			}
+		}
+		if p.maxbackprops > 0 && nn.nbackprops >= p.maxbackprops {
+			converged |= ConvergedMaxBackprops
+			break
+		}
+	}
+	// convergence: weights
+	if p.maxweightdelta > 0 {
+		i := 0
+		for ; i < len(weitrack); i++ {
+			if weitrack[i] > p.maxweightdelta {
+				break
+			}
+		}
+		if i == len(weitrack) && i > 2 {
+			converged |= ConvergedWeight
+		}
+	}
+	// convergence: grads
+	if p.maxgradnorm > 0 {
+		i := 0
+		for ; i < len(gratrack); i++ {
+			if gratrack[i] > p.maxgradnorm {
+				break
+			}
+		}
+		if i == len(gratrack) && i > 2 {
+			converged |= ConvergedGradient
+		}
+	}
+	return
+}
+
 func (nn *NeuNetwork) Train(Xs [][]float64, p TrainParams) int {
 	m := len(Xs)
 	assert(p.resultset == nil || len(p.resultset) == m)
 	assert(p.resultset != nil || p.resultvalcb != nil || p.resultidxcb != nil)
-	batchsize := nn.tunables.batchsize
-	if batchsize < 0 || batchsize > m {
-		batchsize = m
+	if cli.checkgrads {
+		assert(nn.tunables.batchsize == 1, "NIY: cannot compute gradients for batchsize > 1")
 	}
-	bi, repeat, converged, iter := 0, p.repeat, 0, 0
-	if repeat <= 0 {
-		repeat = 1
-	}
+	repeat := max(p.repeat, 1)
 	// the last so-many L2 norm(previous-weights - current-weights) and L2norm(gradient)
 	var weitrack []float64 = newVector(10)
 	var gratrack []float64 = newVector(10)
-	var nw, ng int
-	var trace_cost bool
-
-Loop:
-	for k := 0; k < repeat; k++ {
-		for i, xvec := range Xs {
-			yvec := yvecHelper(xvec, i, p)
-			nn.TrainStep(xvec, yvec)
-			if cli.tracenumbp > 0 && nn.nbackprops%cli.tracenumbp == 0 {
-				if cli.tracecost {
-					trace_cost = true
-				}
-				if cli.checkgrads {
-					nn.CheckGradients(yvec)
-				}
-			}
-			if p.maxgradnorm > 0 {
-				nn.gradnormHelper(gratrack)
-				ng++
-			}
-			bi++
-			if bi >= batchsize {
-				var prew [][]float64
-				if p.maxweightdelta > 0 {
-					prew = nn.weightdeltaBefore()
-					nw++
-				}
-				nn.fixWeights(batchsize)
-				if p.maxweightdelta > 0 {
-					nn.weightdeltaAfter(weitrack, prew)
-				}
-				bi = 0
-				if i+batchsize >= m && k == repeat-1 {
-					batchsize = m - i - 1
-				}
-			}
-			iter++
-			if p.maxiterations > 0 && iter >= p.maxiterations {
-				converged |= ConvergedMaxIterations
-				break Loop
-			}
-			if p.maxbackprops > 0 && nn.nbackprops >= p.maxbackprops {
-				converged |= ConvergedMaxBackprops
-				break Loop
-			}
-		}
+	converged := 0
+	nbp := nn.nbackprops
+	for k := 0; k < repeat && converged == 0; k++ {
+		converged = nn.TrainSet(Xs, p, gratrack, weitrack)
 	}
-	// convergence: max cost
+	// 1. test using a random subset of the training data
+	// 2. check convergence on cost
+	// 3. trace cost while testing
+	trace_cost := cli.tracenumbp > 0 && cli.tracecost && (nn.nbackprops/cli.tracenumbp > nbp/cli.tracenumbp)
 	if p.maxcost > 0 || trace_cost {
 		testingpct := p.testingpct
 		if testingpct == 0 {
-			testingpct = 10
+			testingpct = 30
 		}
 		testingnum := len(Xs) * testingpct / 100
-		if testingnum <= 2 {
-			testingnum = 2
-		}
 		cost := 0.0
 		for k := 0; k < testingnum; k++ {
 			i := int(rand.Int31n(int32(m)))
 			xvec := Xs[i]
 			yvec := yvecHelper(xvec, i, p)
 			nn.forward(xvec)
-			if nn.tunables.costfunction == CostCrossEntropy {
-				cost += nn.CostCrossEntropy(yvec)
-			} else {
-				cost += nn.CostMse(yvec)
-			}
+			cost += nn.costfunction(yvec)
 		}
-		if math.Abs(cost) < math.MaxInt16 {
+		if testingnum > 0 && math.Abs(cost) < math.MaxInt16 {
 			cost /= float64(testingnum)
 			if cost <= p.maxcost {
 				converged |= ConvergedCost
 			}
 			if trace_cost {
-				fmt.Println(nn.nbackprops, fmt.Sprintf(" c %f", cost))
+				log.Print(nn.nbackprops, fmt.Sprintf(" c %f", cost))
 			}
-		}
-	}
-	// convergence: weights
-	if p.maxweightdelta > 0 && nw > 3 {
-		failed := false
-		for i := 0; i < len(weitrack); i++ {
-			if weitrack[i] > p.maxweightdelta {
-				failed = true
-			}
-		}
-		if !failed {
-			converged |= ConvergedWeight
-		}
-	}
-	// convergence: grads
-	if p.maxgradnorm > 0 && ng > 3 {
-		failed := false
-		for i := 0; i < len(gratrack); i++ {
-			if gratrack[i] > p.maxgradnorm {
-				failed = true
-			}
-		}
-		if !failed {
-			converged |= ConvergedGradient
 		}
 	}
 	return converged
@@ -342,11 +320,7 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 				for i, xvec := range testingX {
 					yvec := testingY[i]
 					nn.forward(xvec)
-					if nn.tunables.costfunction == CostCrossEntropy {
-						cost += nn.CostCrossEntropy(yvec)
-					} else {
-						cost += nn.CostMse(yvec)
-					}
+					cost += nn.costfunction(yvec)
 				}
 				cost /= float64(len(testingX))
 				if cost < avgcost {
@@ -384,4 +358,11 @@ func logGra(iter int, gratrack []float64) {
 		g += fmt.Sprintf(" %.6f", gratrack[j])
 	}
 	log.Print(iter, g)
+}
+
+func max(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
