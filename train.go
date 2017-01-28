@@ -76,7 +76,7 @@ func (nn *NeuNetwork) reForward() {
 // must be called right after the backprop pass
 // (in other words, assumes all the gradients[][][] to be updated)
 func (nn *NeuNetwork) CheckGradients(yvec []float64) {
-	const eps = DEFAULT_eps
+	const eps = GRADCHECK_eps
 	const eps2 = eps * 2
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
@@ -92,7 +92,9 @@ func (nn *NeuNetwork) CheckGradients(yvec []float64) {
 				costminus := nn.costfunction(yvec)
 
 				layer.weights[i][j] += eps // restore
-				gradij := (costplus - costminus) / eps2
+				// including the cost contributed by regularization
+				gradij := (costplus - costminus + nn.costl2regeps(l, i, j, eps)) / eps2
+
 				diff := math.Abs(gradij - layer.gradient[i][j])
 				if diff > eps2 {
 					log.Print("grad-check-failed", fmt.Sprintf("[%2d=>(%2d->%2d)] %.4e", l, i, j, diff))
@@ -105,7 +107,7 @@ func (nn *NeuNetwork) CheckGradients(yvec []float64) {
 
 func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, p TrainParams, idxbase int) {
 	assert(len(xbatch) == batchsize)
-	const eps = DEFAULT_eps
+	const eps = GRADCHECK_eps
 	const eps2 = eps * 2
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
@@ -127,7 +129,8 @@ func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, p 
 
 					layer.weights[i][j] += eps // restore
 				}
-				gradij := (costplus - costminus) / float64(batchsize) / eps2
+				// including the cost contributed by L2 regularization
+				gradij := (costplus - costminus + nn.costl2regeps(l, i, j, eps)) / float64(batchsize) / eps2
 				diff := math.Abs(gradij - layer.gradient[i][j])
 				if diff > eps2 {
 					log.Print("grad-batch-failed", fmt.Sprintf("[%2d=>(%2d->%2d)] %.4e", l, i, j, diff))
@@ -241,19 +244,33 @@ func (nn *NeuNetwork) Train(Xs [][]float64, p TrainParams) int {
 	if p.maxcost > 0 || trace_cost {
 		testingpct := p.testingpct
 		if testingpct == 0 {
-			testingpct = 30
+			testingpct = DEFAULT_testingpct
 		}
 		testingnum := len(Xs) * testingpct / 100
-		cost := 0.0
-		for k := 0; k < testingnum; k++ {
-			i := int(rand.Int31n(int32(m)))
-			xvec := Xs[i]
-			yvec := yvecHelper(xvec, i, p)
-			nn.forward(xvec)
-			cost += nn.costfunction(yvec)
+		batchsize := nn.tunables.batchsize
+		if batchsize < 0 || batchsize > m {
+			batchsize = m
 		}
-		if testingnum > 0 && math.Abs(cost) < math.MaxInt16 {
-			cost /= float64(testingnum)
+		// round up
+		numbatches := (testingnum + batchsize/2) / batchsize
+		numbatches = max(numbatches, 1)
+		cost, creg := 0.0, 0.0
+		if nn.tunables.lambda > 0 {
+			creg = nn.CostL2Regularization()
+		}
+		for b := 0; b < numbatches; b++ {
+			cbatch := 0.0
+			for k := 0; k < batchsize; k++ {
+				i := int(rand.Int31n(int32(m)))
+				xvec := Xs[i]
+				yvec := yvecHelper(xvec, i, p)
+				nn.forward(xvec)
+				cbatch += nn.costfunction(yvec)
+			}
+			cost += (cbatch + creg) / float64(batchsize)
+		}
+		if math.Abs(cost) < math.MaxInt16 {
+			cost /= float64(numbatches)
 			if cost <= p.maxcost {
 				converged |= ConvergedCost
 			}

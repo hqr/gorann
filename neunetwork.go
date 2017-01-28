@@ -443,14 +443,11 @@ func (nn *NeuNetwork) CostMse(yvec []float64) float64 {
 }
 
 // the "L2 regularization" part of the cost
-func (nn *NeuNetwork) CostL2RegPart(yvec []float64) (creg float64) {
-	if nn.tunables.lambda == 0 {
-		return
-	}
+func (nn *NeuNetwork) CostL2Regularization() (creg float64) {
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		next := layer.next
-		for i := 0; i < layer.config.size; i++ {
+		for i := 0; i < layer.config.size; i++ { // excepting bias
 			for j := 0; j < next.size; j++ {
 				creg += math.Pow(layer.weights[i][j], 2)
 			}
@@ -458,6 +455,15 @@ func (nn *NeuNetwork) CostL2RegPart(yvec []float64) (creg float64) {
 	}
 	creg = nn.tunables.lambda * creg / 2
 	return
+}
+
+func (nn *NeuNetwork) costl2regeps(l int, i int, j int, eps float64) float64 {
+	layer := nn.layers[l]
+	if nn.tunables.lambda == 0 || i >= layer.config.size {
+		return 0
+	}
+	wij := layer.weights[i][j]
+	return nn.tunables.lambda * (math.Pow(wij+eps, 2) - math.Pow(wij-eps, 2)) / 2
 }
 
 func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {
