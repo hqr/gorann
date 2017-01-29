@@ -76,7 +76,7 @@ type NeuTunables struct {
 	neta       float64
 	lambda     float64 // regularization lambda (default = 0)
 	// other config
-	costfunction  string // half squared euclidean distance (L2 norm) aka LMS | Logistic
+	costfname     string // half squared euclidean distance (L2 norm) aka LMS | Logistic
 	gdalgname     string // gradient descent optimization algorithm (see above)
 	gdalgscopeall bool   // whether to apply optimization algorithm to all layers or just the one facing output
 	batchsize     int    // gradient descent: BatchSGD | BatchTrainingSet | minibatch

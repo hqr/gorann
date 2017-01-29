@@ -317,8 +317,8 @@ func yvecHelper(xvec []float64, i int, p TrainParams) []float64 {
 
 func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 	assert(p.resultset != nil || p.resultvalcb != nil || p.resultidxcb != nil)
-	nn_orig := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables.gdalgname)
-	nn_optm := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables.gdalgname)
+	nn_orig := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables)
+	nn_optm := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables)
 	nn_orig.copyNetwork(nn)
 	nn_optm.copyNetwork(nn)
 

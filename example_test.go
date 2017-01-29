@@ -11,8 +11,7 @@ func ExampleF_xorbits() {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"sigmoid", 16}
 	output := NeuLayerConfig{"sigmoid", 1}
-	nn := NewNeuNetwork(input, hidden, 2, output, ADAM)
-	nn.tunables.alpha = 0.4
+	nn := NewNeuNetwork(input, hidden, 2, output, NeuTunables{gdalgname: ADAM, alpha: 0.4})
 	// nn.tunables.batchsize = 10
 	// nn.tunables.lambda = DEFAULT_lambda
 
@@ -49,7 +48,7 @@ func ExampleF_xorbits() {
 		y1 := nn.Predict(xvec)
 		y2 := xorbits(xvec)
 		crossen += nn.CostCrossEntropy(y2)
-		mse += nn.CostMse(y2)
+		mse += nn.costfunction(y2)
 		a, b, c, d := int(xvec[0]), int(xvec[1]), int(y1[0]), int(y2[0])
 		fmt.Printf("%08b ^ %08b -> %08b : %08b\n", a, b, c, d)
 	}
@@ -67,9 +66,7 @@ func ExampleF_1() {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"sigmoid", 4}
 	output := NeuLayerConfig{"sigmoid", 1}
-	nn := NewNeuNetwork(input, hidden, 2, output, ADAM)
-	nn.tunables.alpha = 0.4
-	nn.tunables.costfunction = CostCrossEntropy
+	nn := NewNeuNetwork(input, hidden, 2, output, NeuTunables{gdalgname: ADAM, alpha: 0.4, costfname: CostCrossEntropy})
 
 	xorbits := func(xvec []float64) []float64 {
 		var y []float64 = []float64{0}
@@ -94,7 +91,7 @@ func ExampleF_1() {
 		y1 := nn.Predict(xvec)
 		y2 := xorbits(xvec)
 		err += nn.AbsError(y2)
-		loss += nn.CostCrossEntropy(y2)
+		loss += nn.costfunction(y2)
 		a, b, c, d := int(xvec[0]), int(xvec[1]), y1[0], int(y2[0])
 		fmt.Printf("%01b ^ %01b -> %.1f : %01b\n", a, b, c, d)
 	}
@@ -110,7 +107,7 @@ func ExampleF_sumsquares() {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"sigmoid", 16}
 	output := NeuLayerConfig{"identity", 1}
-	nn := NewNeuNetwork(input, hidden, 2, output, Rprop)
+	nn := NewNeuNetwork(input, hidden, 2, output, NeuTunables{gdalgname: Rprop})
 
 	sumsquares := func(xvec []float64) []float64 {
 		var y []float64 = []float64{0}
@@ -136,7 +133,7 @@ func ExampleF_sumsquares() {
 		xvec[1] = rand.Float64() / 1.5
 		y1 := nn.Predict(xvec)
 		y2 := sumsquares(xvec)
-		loss += nn.CostMse(y2)
+		loss += nn.costfunction(y2)
 		fmt.Printf("%.3f**2 + %.3f**2 -> %.3f : %.3f\n", xvec[0], xvec[1], y1[0], y2[0])
 	}
 	fmt.Printf("loss %.3e\n", loss/4.0)
@@ -153,8 +150,7 @@ func ExampleF_sumlogarithms() {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"tanh", 8}
 	output := NeuLayerConfig{"tanh", 1}
-	nn := NewNeuNetwork(input, hidden, 5, output, RMSprop)
-	nn.tunables.batchsize = 10
+	nn := NewNeuNetwork(input, hidden, 5, output, NeuTunables{gdalgname: RMSprop, batchsize: 10})
 
 	normalize := func(vec []float64) {
 		divElemVector(vec, float64(-8))
@@ -189,7 +185,7 @@ func ExampleF_sumlogarithms() {
 		xvec[1] = rand.Float64()
 		y2 := sumlogarithms(xvec)
 		y1 := nn.Predict(xvec)
-		mse += nn.CostMse(y2)
+		mse += nn.costfunction(y2)
 		fmt.Printf("log(%.3f) + log(%.3f) -> %.3f : %.3f\n", xvec[0], xvec[1], y1[0], y2[0])
 	}
 	fmt.Printf("mse %.4e\n", mse/4)

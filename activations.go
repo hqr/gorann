@@ -97,3 +97,19 @@ func softplus(x float64) float64 {
 func dsoftplus(x float64) float64 {
 	return 1 / (1 + math.Exp(-x))
 }
+
+//-----------------------------------------------------------------------
+//
+// softmax - special case, not registered
+//
+//-----------------------------------------------------------------------
+func softmax(sumexp float64, x float64) float64 {
+	return math.Exp(x) / sumexp
+}
+
+func dsoftmax(y []float64, i int, j int) float64 {
+	if i == j {
+		return y[i] * (1 - y[i])
+	}
+	return -y[i] * y[j]
+}

@@ -37,8 +37,8 @@ type NeuLayer struct {
 }
 
 // c-tor
-func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, coutput NeuLayerConfig, gdalgname string) *NeuNetwork {
-	nn := &NeuNetwork{cinput: cinput, chidden: chidden, coutput: coutput}
+func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, coutput NeuLayerConfig, tunables NeuTunables) *NeuNetwork {
+	nn := &NeuNetwork{cinput: cinput, chidden: chidden, coutput: coutput, tunables: tunables}
 
 	nn.lastidx = numhidden + 1
 	nn.layers = make([]*NeuLayer, numhidden+2)
@@ -64,15 +64,36 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 		layer := nn.layers[idx]
 		layer.init(nn)
 	}
-	// default tunables common for all
-	nn.tunables = NeuTunables{alpha: DEFAULT_alpha, momentum: DEFAULT_momentum, batchsize: DEFAULT_batchsize, gdalgname: gdalgname, costfunction: CostMse}
+	// set tunable defaults unless already defined
+	nn.initunables()
 
-	// algorithm-specific default hyperparams
+	// algorithm-specific default hyper-params
 	nn.initgdalg(nn.tunables.gdalgname)
 
-	// other settings via TBD CLI
+	//
+	// other useful settings
+	//
 	// nn.tunables.gdalgscopeall = true
+	// nn.tunables.costfname = CostCrossEntropy
+	// nn.tunables.lambda = DEFAULT_lambda
+	// nn.tunables.batchsize = 10..100
 	return nn
+}
+
+func (nn *NeuNetwork) initunables() {
+	//NeuTunables{alpha: DEFAULT_alpha, momentum: DEFAULT_momentum, batchsize: DEFAULT_batchsize, gdalgname: gdalgname, costfname: CostMse}
+	if nn.tunables.alpha == 0 {
+		nn.tunables.alpha = DEFAULT_alpha
+	}
+	if nn.tunables.momentum == 0 {
+		nn.tunables.momentum = DEFAULT_momentum
+	}
+	if nn.tunables.batchsize == 0 {
+		nn.tunables.batchsize = DEFAULT_batchsize
+	}
+	if len(nn.tunables.costfname) == 0 {
+		nn.tunables.costfname = CostMse
+	}
 }
 
 func (nn *NeuNetwork) reset() {
@@ -106,8 +127,11 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 	layer.deltas = newVector(layer.size)
 	layer.nn = nn
 	if layer.next == nil {
+		assert(layer.config.actfname != "softmax" || nn.tunables.costfname == CostCrossEntropy, "softmax must be used with cross-entropy cost")
 		return
 	}
+	// nor is it recommended
+	assert(layer.config.actfname != "softmax", "softmax activation for inner layers is currently not supported")
 	layer.weights = newMatrix(layer.size, layer.next.size, -1.0, 1.0)
 	next := layer.next
 	// init weights, alt init below
@@ -170,10 +194,6 @@ func (nn *NeuNetwork) initgdalg(gdalgname string) {
 	}
 }
 
-func (layer *NeuLayer) isHidden() bool {
-	return layer.idx > 0 && layer.next != nil
-}
-
 func (nn *NeuNetwork) forward(xvec []float64) []float64 {
 	assert(len(xvec) == nn.cinput.size)
 	var xnorm []float64 = xvec
@@ -193,6 +213,18 @@ func (nn *NeuNetwork) forward(xvec []float64) []float64 {
 func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
 	prev := layer.prev
 	actF := activations[layer.config.actfname]
+	if layer.config.actfname == "softmax" {
+		sumexp := 0.0
+		for i := 0; i < layer.config.size; i++ {
+			sum := mulColVec(prev.weights, i, prev.avec, prev.size)
+			layer.zvec[i] = sum
+			sumexp += math.Exp(sum)
+		}
+		for i := 0; i < layer.config.size; i++ {
+			layer.avec[i] = softmax(sumexp, layer.zvec[i])
+		}
+		return
+	}
 	for i := 0; i < layer.config.size; i++ {
 		sum := mulColVec(prev.weights, i, prev.avec, prev.size)
 		layer.zvec[i] = sum
@@ -203,21 +235,27 @@ func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
 // see for instance https://web.stanford.edu/class/cs294a/sparseAutoencoder_2011new.pdf
 func (nn *NeuNetwork) backprop(yvec []float64) {
 	assert(len(yvec) == nn.coutput.size)
-	assert(nn.tunables.costfunction == CostMse || nn.tunables.costfunction == CostCrossEntropy, "NIY: delta rule for the spec-ed cost")
+	outputL := nn.layers[nn.lastidx]
+	cname, aname := nn.tunables.costfname, outputL.config.actfname
+	assert(cname == CostMse || cname == CostCrossEntropy, "NIY: delta rule for the spec-ed cost function")
+
 	nn.nbackprops++
 	//
 	// delta rules
 	//
-	outputL := nn.layers[nn.lastidx]
-	actF := activations[outputL.config.actfname]
-	if nn.tunables.costfunction == CostCrossEntropy && outputL.config.actfname == "sigmoid" {
+	actF := activations[aname]
+	if cname == CostCrossEntropy && (aname == "sigmoid" || aname == "softmax") {
 		for i := 0; i < nn.coutput.size; i++ {
 			outputL.deltas[i] = outputL.avec[i] - yvec[i]
 		}
 	} else {
 		for i := 0; i < nn.coutput.size; i++ {
-			if nn.tunables.costfunction == CostCrossEntropy {
-				outputL.deltas[i] = (outputL.avec[i] - yvec[i]) / (outputL.avec[i] * (1 - outputL.avec[i]))
+			if cname == CostCrossEntropy {
+				if nn.coutput.size == 1 {
+					outputL.deltas[i] = (outputL.avec[i] - yvec[i]) / (outputL.avec[i] * (1 - outputL.avec[i]))
+				} else {
+					outputL.deltas[i] = -yvec[i] / outputL.avec[i]
+				}
 			} else {
 				outputL.deltas[i] = outputL.avec[i] - yvec[i]
 			}
@@ -416,94 +454,4 @@ func (layer *NeuLayer) weightij_Rprop(i int, j int) float64 {
 	}
 
 	return weightij
-}
-
-func (nn *NeuNetwork) costfunction(yvec []float64) (cost float64) {
-	if nn.tunables.costfunction == CostCrossEntropy {
-		cost = nn.CostCrossEntropy(yvec)
-	} else {
-		cost = nn.CostMse(yvec)
-	}
-	return
-}
-
-//
-// cost helpers: the yvec is true (training) value
-// must be called after the corresponding feed-forward step
-//
-func (nn *NeuNetwork) CostMse(yvec []float64) float64 {
-	assert(len(yvec) == nn.coutput.size)
-	var ynorm []float64 = yvec
-	if nn.callbacks.normcbY != nil {
-		ynorm = cloneVector(yvec)
-		nn.callbacks.normcbY(ynorm)
-	}
-	outputL := nn.layers[nn.lastidx]
-	return normL2VectorSquared(ynorm, outputL.avec) / 2
-}
-
-// the "L2 regularization" part of the cost
-func (nn *NeuNetwork) CostL2Regularization() (creg float64) {
-	for l := 0; l < nn.lastidx; l++ {
-		layer := nn.layers[l]
-		next := layer.next
-		for i := 0; i < layer.config.size; i++ { // excepting bias
-			for j := 0; j < next.size; j++ {
-				creg += math.Pow(layer.weights[i][j], 2)
-			}
-		}
-	}
-	creg = nn.tunables.lambda * creg / 2
-	return
-}
-
-func (nn *NeuNetwork) costl2regeps(l int, i int, j int, eps float64) float64 {
-	layer := nn.layers[l]
-	if nn.tunables.lambda == 0 || i >= layer.config.size {
-		return 0
-	}
-	wij := layer.weights[i][j]
-	return nn.tunables.lambda * (math.Pow(wij+eps, 2) - math.Pow(wij-eps, 2)) / 2
-}
-
-func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {
-	assert(len(yvec) == nn.coutput.size)
-	var ynorm []float64 = yvec
-	if nn.callbacks.normcbY != nil {
-		ynorm = cloneVector(yvec)
-		nn.callbacks.normcbY(ynorm)
-	}
-	var err float64
-	outputL := nn.layers[nn.lastidx]
-	for i := 0; i < len(ynorm); i++ {
-		costi := 0.0
-		a := outputL.avec[i]
-		if math.Abs(a) < ADAM_eps {
-			a = ADAM_eps
-		} else if math.Abs(a-1) < ADAM_eps {
-			a = 1 - ADAM_eps
-		}
-		if math.Abs(ynorm[i]-1) < ADAM_eps {
-			costi = math.Log(a)
-		} else if math.Abs(ynorm[i]) < ADAM_eps {
-			costi = math.Log(1 - a)
-		} else {
-			costi = ynorm[i]*math.Log(a) + (1-ynorm[i])*math.Log(1-a)
-		}
-		err += costi
-	}
-	return -err / 2
-}
-
-// unlike the conventional Cost functions above, this one works on denormalized result vectors
-// note also that it returns L1 norm
-func (nn *NeuNetwork) AbsError(yvec []float64) float64 {
-	assert(len(yvec) == nn.coutput.size)
-	outputL := nn.layers[nn.lastidx]
-	var ydenorm []float64 = outputL.avec
-	if nn.callbacks.denormcbY != nil {
-		ydenorm = cloneVector(outputL.avec)
-		nn.callbacks.denormcbY(ydenorm)
-	}
-	return normL1Vector(ydenorm, yvec)
 }
