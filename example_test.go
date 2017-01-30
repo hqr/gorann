@@ -48,7 +48,7 @@ func ExampleF_xorbits() {
 		y1 := nn.Predict(xvec)
 		y2 := xorbits(xvec)
 		crossen += nn.CostCrossEntropy(y2)
-		mse += nn.costfunction(y2)
+		mse += nn.CostMse(y2)
 		a, b, c, d := int(xvec[0]), int(xvec[1]), int(y1[0]), int(y2[0])
 		fmt.Printf("%08b ^ %08b -> %08b : %08b\n", a, b, c, d)
 	}
@@ -58,7 +58,7 @@ func ExampleF_xorbits() {
 	// 01101101 ^ 10011110 -> 11101111 : 11110011
 	// 11001011 ^ 11011110 -> 00011000 : 00010101
 	// 10111101 ^ 00000011 -> 10111101 : 10111110
-	// cross-entropy 0.13692, mse 0.00006
+	// cross-entropy 0.27384, mse 0.00006
 }
 
 func ExampleF_1() {

@@ -59,18 +59,24 @@ func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.normcbY(ynorm)
 	}
+	outputL := nn.layers[nn.lastidx]
+	aname, avec, zvec := outputL.config.actfname, outputL.avec, outputL.zvec
 	var err float64
-	avec := nn.layers[nn.lastidx].avec
 
 	// special case: binary classification
 	if len(ynorm) == 1 {
+		// special sub-case: logistic regression
+		if aname == "sigmoid" {
+			err = ynorm[0]*zvec[0] - math.Log(1+math.Exp(zvec[0]))
+			return -err
+		}
 		ynorm = []float64{ynorm[0], 1 - ynorm[0]}
 		avec = []float64{avec[0], 1 - avec[0]}
 	}
 	for i := 0; i < len(ynorm); i++ {
 		err += ynorm[i] * math.Log(avec[i])
 	}
-	return -err / 2
+	return -err
 }
 
 // unlike the conventional Cost functions above, this one works on denormalized result vectors
