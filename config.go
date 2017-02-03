@@ -46,7 +46,7 @@ const (
 	Rprop_neta   = 0.5
 )
 
-// default hyper-parameters & misc
+// default hyper-parameters
 const (
 	DEFAULT_batchsize = BatchSGD
 	DEFAULT_alpha     = 0.01 // learning rate
@@ -56,8 +56,6 @@ const (
 	DEFAULT_eps   = 1E-5
 	GRADCHECK_eps = 1E-4
 	DEFAULT_gamma = 0.9
-	// misc
-	DEFAULT_testingpct = 30
 )
 
 // neural network tunables - a superset

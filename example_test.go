@@ -32,13 +32,14 @@ func ExampleF_xorbits() {
 		return y
 	}
 	Xs := newMatrix(100, 2)
+	ttp := &TTP{nn: nn, resultvalcb: xorbits, repeat: 3, pct: 60, maxcost: 1E-3, maxbackprops: 1E7}
 	converged := 0
 	for converged == 0 {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0] = float64(rand.Int31n(maxint))
 			Xs[i][1] = float64(rand.Int31n(maxint))
 		}
-		converged = nn.Train(Xs, TrainParams{resultvalcb: xorbits, repeat: 3, testingpct: 60, maxcost: 1E-3, maxbackprops: 1E7})
+		converged = nn.Train(Xs, ttp)
 	}
 	// test and print the results (expected output below)
 	var crossen, mse float64
@@ -76,13 +77,14 @@ func ExampleF_1() {
 		return y
 	}
 	Xs := newMatrix(100, 2)
+	ttp := &TTP{nn: nn, resultvalcb: xorbits, pct: 90, maxcost: 1E-8, maxbackprops: 1E6}
 	converged := 0
 	for i := 0; i < len(Xs); i++ {
 		Xs[i][0] = float64(rand.Int31n(2))
 		Xs[i][1] = float64(rand.Int31n(2))
 	}
 	for converged == 0 {
-		converged = nn.Train(Xs, TrainParams{resultvalcb: xorbits, testingpct: 90, maxcost: 1E-8, maxbackprops: 1E6})
+		converged = nn.Train(Xs, ttp)
 	}
 	// test and print the results (expected output below)
 	var err, loss float64
@@ -117,13 +119,14 @@ func ExampleF_sumsquares() {
 		return y
 	}
 	Xs := newMatrix(1000, 2)
+	ttp := &TTP{nn: nn, resultvalcb: sumsquares, repeat: 3, pct: 30, maxcost: 5E-7}
 	converged := 0
 	for converged == 0 {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0] = rand.Float64() / 1.5
 			Xs[i][1] = rand.Float64() / 1.5
 		}
-		converged = nn.Train(Xs, TrainParams{resultvalcb: sumsquares, repeat: 3, testingpct: 30, maxcost: 5E-7})
+		converged = nn.Train(Xs, ttp)
 	}
 	// use to estimate
 	var loss float64
@@ -168,12 +171,13 @@ func ExampleF_sumlogarithms() {
 		return y
 	}
 	Xs := newMatrix(100, 2)
+	ttp := &TTP{nn: nn, resultvalcb: sumlogarithms, repeat: 3, maxcost: 1E-5, maxbackprops: 1E6}
 	var converged int
 	for converged == 0 {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
 		}
-		converged = nn.Train(Xs, TrainParams{resultvalcb: sumlogarithms, repeat: 3, maxcost: 1E-5, maxbackprops: 1E6})
+		converged = nn.Train(Xs, ttp)
 	}
 	if converged&ConvergedMaxBackprops > 0 {
 		fmt.Printf("maxed out on back propagations %d\n", nn.nbackprops)

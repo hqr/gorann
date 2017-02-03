@@ -5,6 +5,20 @@ import (
 	"math/rand"
 )
 
+//
+// interfaces
+//
+type NeuNetworkInterface interface {
+	forward(xvec []float64) []float64
+	reForward()
+	backprop(yvec []float64)
+	fixGradients(batchsize int)
+	fixWeights(batchsize int)
+}
+
+//
+// objects
+//
 type NeuNetwork struct {
 	cinput    NeuLayerConfig
 	chidden   NeuLayerConfig
@@ -15,6 +29,8 @@ type NeuNetwork struct {
 	layers     []*NeuLayer
 	lastidx    int
 	nbackprops int
+	// polymorphism
+	nnint NeuNetworkInterface
 }
 
 type NeuLayer struct {
@@ -39,7 +55,7 @@ type NeuLayer struct {
 // c-tor
 func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, coutput NeuLayerConfig, tunables NeuTunables) *NeuNetwork {
 	nn := &NeuNetwork{cinput: cinput, chidden: chidden, coutput: coutput, tunables: tunables}
-
+	nn.nnint = nn
 	nn.lastidx = numhidden + 1
 	nn.layers = make([]*NeuLayer, numhidden+2)
 	// construct layers
@@ -80,6 +96,9 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 	return nn
 }
 
+//
+// methods
+//
 func (nn *NeuNetwork) initunables() {
 	//NeuTunables{alpha: DEFAULT_alpha, momentum: DEFAULT_momentum, batchsize: DEFAULT_batchsize, gdalgname: gdalgname, costfname: CostMse}
 	if nn.tunables.alpha == 0 {
@@ -208,6 +227,13 @@ func (nn *NeuNetwork) forward(xvec []float64) []float64 {
 	}
 	outputL := nn.layers[nn.lastidx]
 	return outputL.avec
+}
+
+// feed-forward pass on the *already stored* input, possibly with different weights
+func (nn *NeuNetwork) reForward() {
+	for l := 1; l <= nn.lastidx; l++ {
+		nn.forwardLayer(nn.layers[l])
+	}
 }
 
 func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
@@ -356,6 +382,7 @@ func (layer *NeuLayer) weightij(i int, j int) float64 {
 	return weightij
 }
 
+// ADAptive GRADient
 func (layer *NeuLayer) weightij_Adagrad(i int, j int) float64 {
 	nn := layer.nn
 	alpha := nn.tunables.alpha
@@ -392,10 +419,12 @@ func (layer *NeuLayer) weightij_Adadelta(i int, j int) float64 {
 	}
 
 	weightij = weightij - alpha*layer.gradient[i][j]
+	// NOTE: still using momentum
 	weightij -= nn.tunables.momentum * layer.pregradient[i][j]
 	return weightij
 }
 
+// Root Mean Squared adaptive backPROPagation
 func (layer *NeuLayer) weightij_RMSprop(i int, j int) float64 {
 	nn := layer.nn
 	alpha := nn.tunables.alpha
@@ -409,10 +438,12 @@ func (layer *NeuLayer) weightij_RMSprop(i int, j int) float64 {
 		alpha /= (math.Sqrt(layer.rmsgradient[i][j] + eps))
 	}
 	weightij = weightij - alpha*layer.gradient[i][j]
+	// NOTE: still using momentum
 	weightij -= nn.tunables.momentum * layer.pregradient[i][j]
 	return weightij
 }
 
+// ADAptive Moment estimation
 func (layer *NeuLayer) weightij_ADAM(i int, j int) float64 {
 	nn := layer.nn
 	alpha := nn.tunables.gdalgalpha
@@ -430,6 +461,7 @@ func (layer *NeuLayer) weightij_ADAM(i int, j int) float64 {
 	return weightij
 }
 
+// Resilient backPROPagation
 func (layer *NeuLayer) weightij_Rprop(i int, j int) float64 {
 	nn := layer.nn
 	alpha := nn.tunables.alpha

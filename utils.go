@@ -206,6 +206,22 @@ func pushVector(vec []float64, x float64) {
 	vec[len(vec)-1] = x
 }
 
+func ltVector(max float64, num int, vec []float64) bool {
+	if max > 0 && len(vec) > num {
+		i := 0
+		for ; i < len(vec); i++ {
+			if vec[i] >= max {
+				return false
+			}
+		}
+		return i > num
+	}
+	return false
+}
+
+//
+// misc
+//
 func copyStruct(dst interface{}, src interface{}) {
 	x := reflect.ValueOf(src)
 	if x.Kind() == reflect.Ptr {
@@ -217,4 +233,11 @@ func copyStruct(dst interface{}, src interface{}) {
 	} else {
 		dst = x.Interface()
 	}
+}
+
+func max(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

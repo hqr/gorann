@@ -26,26 +26,161 @@ type CommandLine struct {
 
 var cli = CommandLine{}
 
+//===========================================================================
 //
-// types
+// Training & Testing Parameters (TTP)
 //
-type TrainParams struct {
-	// either actual result set or one of the callbacks
+//===========================================================================
+type TTP struct {
+	// the network
+	nn *NeuNetwork
+	// actual result set, or one of the callbacks below
 	resultset   [][]float64
 	resultvalcb func(xvec []float64) []float64 // generate yvec for a given xvec
 	resultidxcb func(xidx int) []float64       // compute yvec given an index of xvec from the training set
 	// repeat training set so many times
 	repeat int
-	// use %% of training set for testing
-	testingpct int
-	// converged? one or several of the conditions, whatever comes first
+	// testing policy
+	pct       int  // %% of the training set for testing
+	num       int  // number of training instances used for --/--
+	randbatch bool // test random batches selected out of the training set
+	seqtail   bool // do not use the "tail" of the training set for training, rather use it for testing only
+	batchsize int  // based on the size of the training set and the network tunable
+	// converged? bitwise sum of conditions below
+	// note: Train() routine exits on whatever comes first
 	maxweightdelta float64 // L2 norm(previous-weights - current-weights)
 	maxgradnorm    float64 // L2 norm(gradient)
 	maxcost        float64 // average cost-function(testing-set)
-	maxerror       float64 // average L1 norm || yvec - predicted-yvec ||
 	maxbackprops   int     // max number of back propagations
+	// runtime
+	weitrack []float64   // L2 norm(previous-weights - current-weights)
+	gratrack []float64   // L2 norm(gradient)
+	prew     [][]float64 // weights - before
 }
 
+// set defaults
+func (ttp *TTP) init(m int) {
+	assert(ttp.nn != nil)
+	assert(ttp.resultset == nil || len(ttp.resultset) == m)
+	assert(ttp.resultset != nil || ttp.resultvalcb != nil || ttp.resultidxcb != nil)
+	if !ttp.seqtail {
+		ttp.randbatch = true
+	}
+	if ttp.pct == 0 && ttp.num == 0 {
+		ttp.pct = 30
+	}
+	ttp.repeat = max(ttp.repeat, 1)
+
+	ttp.batchsize = ttp.nn.tunables.batchsize
+	if ttp.batchsize < 0 || ttp.batchsize > m {
+		ttp.batchsize = m
+	}
+	ttp.weitrack = newVector(10, 1000.0)
+	ttp.gratrack = newVector(10, 1000.0)
+}
+
+func (ttp *TTP) getYvec(xvec []float64, i int) []float64 {
+	var yvec []float64
+	switch {
+	case ttp.resultset != nil:
+		yvec = ttp.resultset[i]
+	case ttp.resultvalcb != nil:
+		yvec = ttp.resultvalcb(xvec)
+	case ttp.resultidxcb != nil:
+		yvec = ttp.resultidxcb(i)
+	}
+	return yvec
+}
+
+func (ttp *TTP) gradnormTracker() {
+	if ttp.maxgradnorm > 0 {
+		nn := ttp.nn
+		layer := nn.layers[nn.lastidx-1] // the last hidden layer, next to the output
+		edist0 := normL2Matrix(layer.gradient, nil)
+		shiftVector(ttp.gratrack)
+		pushVector(ttp.gratrack, edist0)
+	}
+}
+
+func (ttp *TTP) weightdeltaBefore() {
+	if ttp.maxweightdelta > 0 {
+		nn := ttp.nn
+		layer := nn.layers[nn.lastidx-1] // the last hidden layer, next to the output
+		ttp.prew = cloneMatrix(layer.weights)
+	}
+}
+
+func (ttp *TTP) weightdeltaAfter() {
+	if ttp.maxweightdelta > 0 {
+		nn := ttp.nn
+		layer := nn.layers[nn.lastidx-1] // last hidden
+		edist := normL2Matrix(ttp.prew, layer.weights)
+		shiftVector(ttp.weitrack)
+		pushVector(ttp.weitrack, edist)
+	}
+}
+
+func (ttp *TTP) converged() (cnv int) {
+	// num backprops
+	if ttp.maxbackprops > 0 && ttp.nn.nbackprops >= ttp.maxbackprops {
+		cnv |= ConvergedMaxBackprops
+	}
+	// weights
+	if ltVector(ttp.maxweightdelta, 2, ttp.weitrack) {
+		cnv |= ConvergedWeight
+	}
+	// grads
+	if ltVector(ttp.maxgradnorm, 2, ttp.gratrack) {
+		cnv |= ConvergedGradient
+	}
+	return
+}
+
+func (ttp *TTP) testRandomBatch(Xs [][]float64, cnv int, nbp int) int {
+	if !ttp.randbatch {
+		return cnv
+	}
+	nn, m, num := ttp.nn, len(Xs), ttp.num
+	if num == 0 {
+		num = m * ttp.pct / 100
+	}
+	trace_cost := cli.tracenumbp > 0 && cli.tracecost && (nn.nbackprops/cli.tracenumbp > nbp/cli.tracenumbp)
+	if ttp.maxcost == 0 && !trace_cost {
+		return cnv
+	}
+	// round up
+	numbatches := (num + ttp.batchsize/2) / ttp.batchsize
+	numbatches = max(numbatches, 1)
+	cost, creg := 0.0, 0.0
+	if nn.tunables.lambda > 0 {
+		creg = nn.CostL2Regularization()
+	}
+	for b := 0; b < numbatches; b++ {
+		cbatch := 0.0
+		for k := 0; k < ttp.batchsize; k++ {
+			i := int(rand.Int31n(int32(m)))
+			xvec := Xs[i]
+			yvec := ttp.getYvec(xvec, i)
+			nn.nnint.forward(xvec)
+			cbatch += nn.costfunction(yvec)
+		}
+		cost += (cbatch + creg) / float64(ttp.batchsize)
+	}
+	if math.Abs(cost) < math.MaxInt16 {
+		cost /= float64(numbatches)
+		if cost < ttp.maxcost {
+			cnv |= ConvergedCost
+		}
+		if trace_cost {
+			log.Print(nn.nbackprops, fmt.Sprintf(" c %f", cost))
+		}
+	}
+	return cnv
+}
+
+//
+// init
+//
 func init() {
 	flag.IntVar(&cli.tracenumbp, "nbp", 0, "trace interval")
 	flag.BoolVar(&cli.checkgrads, "grad", false, "check gradients every \"trace interval\"")
@@ -56,21 +191,19 @@ func init() {
 	assert(!cli.tracecost || cli.tracenumbp > 0)
 }
 
+//===========================================================================
+//
+// nn training/testing methods
+//
+//===========================================================================
 func (nn *NeuNetwork) Predict(xvec []float64) []float64 {
-	yvec := nn.forward(xvec)
+	yvec := nn.nnint.forward(xvec)
 	var ynorm []float64 = yvec
 	if nn.callbacks.denormcbY != nil {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.denormcbY(ynorm)
 	}
 	return ynorm
-}
-
-// feed-forward pass for the same *already stored* input, possibly with different weights
-func (nn *NeuNetwork) reForward() {
-	for l := 1; l <= nn.lastidx; l++ {
-		nn.forwardLayer(nn.layers[l])
-	}
 }
 
 // must be called right after the backprop pass
@@ -84,11 +217,11 @@ func (nn *NeuNetwork) CheckGradients(yvec []float64) {
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
 				layer.weights[i][j] += eps
-				nn.reForward()
+				nn.nnint.reForward()
 				costplus := nn.costfunction(yvec)
 
 				layer.weights[i][j] -= eps2
-				nn.reForward()
+				nn.nnint.reForward()
 				costminus := nn.costfunction(yvec)
 
 				layer.weights[i][j] += eps // restore
@@ -105,8 +238,8 @@ func (nn *NeuNetwork) CheckGradients(yvec []float64) {
 	}
 }
 
-func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, p TrainParams, idxbase int) {
-	assert(len(xbatch) == batchsize)
+func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, ttp *TTP, idxbase int) {
+	assert(len(xbatch) == ttp.batchsize)
 	const eps = GRADCHECK_eps
 	const eps2 = eps * 2
 	for l := 0; l < nn.lastidx; l++ {
@@ -115,22 +248,22 @@ func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, p 
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
 				var costplus, costminus float64
-				for k := 0; k < batchsize; k++ {
+				for k := 0; k < ttp.batchsize; k++ {
 					xvec := xbatch[k]
-					yvec := yvecHelper(xvec, idxbase+k, p)
+					yvec := ttp.getYvec(xvec, idxbase+k)
 
 					layer.weights[i][j] += eps
-					nn.forward(xvec)
+					nn.nnint.forward(xvec)
 					costplus += nn.costfunction(yvec)
 
 					layer.weights[i][j] -= eps2
-					nn.reForward()
+					nn.nnint.reForward()
 					costminus += nn.costfunction(yvec)
 
 					layer.weights[i][j] += eps // restore
 				}
 				// including the cost contributed by L2 regularization
-				gradij := (costplus - costminus + nn.costl2regeps(l, i, j, eps)) / float64(batchsize) / eps2
+				gradij := (costplus - costminus + nn.costl2regeps(l, i, j, eps)) / float64(ttp.batchsize) / eps2
 				diff := math.Abs(gradij - layer.gradient[i][j])
 				if diff > eps2 {
 					log.Print("grad-batch-failed", fmt.Sprintf("[%2d=>(%2d->%2d)] %.4e", l, i, j, diff))
@@ -145,178 +278,59 @@ func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
 	assert(nn.cinput.size == len(xvec), fmt.Sprintf("num inputs: %d (must be %d)", len(xvec), nn.cinput.size))
 	assert(nn.coutput.size == len(yvec), fmt.Sprintf("num outputs: %d (must be %d)", len(yvec), nn.coutput.size))
 
-	nn.forward(xvec)
+	nn.nnint.forward(xvec)
 	var ynorm []float64 = yvec
 	if nn.callbacks.normcbY != nil {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.normcbY(ynorm)
 	}
-	nn.backprop(ynorm)
+	nn.nnint.backprop(ynorm)
 }
 
-func (nn *NeuNetwork) TrainSet(Xs [][]float64, p TrainParams, gratrack []float64, weitrack []float64) (converged int) {
-	m := len(Xs)
-	batchsize, bi := nn.tunables.batchsize, 0
-	if batchsize < 0 || batchsize > m {
-		batchsize = m
-	}
+func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP) int {
+	m, bi, batchsize := len(Xs), 0, ttp.batchsize
 	for i, xvec := range Xs {
-		yvec := yvecHelper(xvec, i, p)
+		yvec := ttp.getYvec(xvec, i)
 		nn.TrainStep(xvec, yvec)
 		bi++
-		if bi >= batchsize {
-			if p.maxgradnorm > 0 {
-				nn.gradnormHelper(gratrack)
-			}
-			var prew [][]float64
-			if p.maxweightdelta > 0 {
-				prew = nn.weightdeltaBefore()
-			}
-
-			nn.fixGradients(batchsize) // <============== (1)
-			if cli.checkgrads && (cli.tracenumbp > 0 && nn.nbackprops%cli.tracenumbp == 0) {
-				if batchsize == 1 {
-					nn.CheckGradients(yvec)
-				} else {
-					nn.CheckGradients_Batch(Xs[i-batchsize+1:i+1], batchsize, p, i-batchsize+1)
-				}
-			}
-			nn.fixWeights(batchsize) // <============== (2)
-
-			if p.maxweightdelta > 0 {
-				nn.weightdeltaAfter(weitrack, prew)
-			}
-			bi = 0
-			if i+batchsize >= m {
-				batchsize = m - i - 1
+		if bi < batchsize {
+			continue
+		}
+		ttp.gradnormTracker()
+		ttp.weightdeltaBefore()
+		nn.nnint.fixGradients(batchsize) // <============== (1)
+		if cli.checkgrads && (cli.tracenumbp > 0 && nn.nbackprops%cli.tracenumbp == 0) {
+			if batchsize == 1 {
+				nn.CheckGradients(yvec)
+			} else {
+				nn.CheckGradients_Batch(Xs[i-batchsize+1:i+1], batchsize, ttp, i-batchsize+1)
 			}
 		}
-		if p.maxbackprops > 0 && nn.nbackprops >= p.maxbackprops {
-			converged |= ConvergedMaxBackprops
-			break
+		nn.nnint.fixWeights(batchsize) // <============== (2)
+		ttp.weightdeltaAfter()
+		bi = 0
+		if i+batchsize >= m {
+			batchsize = m - i - 1
 		}
 	}
-	// convergence: weights
-	if p.maxweightdelta > 0 {
-		i := 0
-		for ; i < len(weitrack); i++ {
-			if weitrack[i] > p.maxweightdelta {
-				break
-			}
-		}
-		if i == len(weitrack) && i > 2 {
-			converged |= ConvergedWeight
-		}
-	}
-	// convergence: grads
-	if p.maxgradnorm > 0 {
-		i := 0
-		for ; i < len(gratrack); i++ {
-			if gratrack[i] > p.maxgradnorm {
-				break
-			}
-		}
-		if i == len(gratrack) && i > 2 {
-			converged |= ConvergedGradient
-		}
-	}
-	return
+	return ttp.converged()
 }
 
-func (nn *NeuNetwork) Train(Xs [][]float64, p TrainParams) int {
-	m := len(Xs)
-	assert(p.resultset == nil || len(p.resultset) == m)
-	assert(p.resultset != nil || p.resultvalcb != nil || p.resultidxcb != nil)
-
-	var weitrack []float64 = newVector(10) // L2 norm(previous-weights - current-weights)
-	var gratrack []float64 = newVector(10) // L2 norm(gradient)
-	repeat := max(p.repeat, 1)
-	converged := 0
-	nbp := nn.nbackprops
+func (nn *NeuNetwork) Train(Xs [][]float64, ttp *TTP) int {
+	converged, nbp := 0, nn.nbackprops
+	ttp.init(len(Xs))
+	//
 	// do the training
-	for k := 0; k < repeat && converged == 0; k++ {
-		converged = nn.TrainSet(Xs, p, gratrack, weitrack)
+	for k := 0; k < ttp.repeat && converged == 0; k++ {
+		converged = nn.TrainSet(Xs, ttp)
 	}
 	// 1. test using a random subset of the training data
 	// 2. check convergence on cost
 	// 3. trace cost while testing
-	trace_cost := cli.tracenumbp > 0 && cli.tracecost && (nn.nbackprops/cli.tracenumbp > nbp/cli.tracenumbp)
-	if p.maxcost > 0 || trace_cost {
-		testingpct := p.testingpct
-		if testingpct == 0 {
-			testingpct = DEFAULT_testingpct
-		}
-		testingnum := len(Xs) * testingpct / 100
-		batchsize := nn.tunables.batchsize
-		if batchsize < 0 || batchsize > m {
-			batchsize = m
-		}
-		// round up
-		numbatches := (testingnum + batchsize/2) / batchsize
-		numbatches = max(numbatches, 1)
-		cost, creg := 0.0, 0.0
-		if nn.tunables.lambda > 0 {
-			creg = nn.CostL2Regularization()
-		}
-		for b := 0; b < numbatches; b++ {
-			cbatch := 0.0
-			for k := 0; k < batchsize; k++ {
-				i := int(rand.Int31n(int32(m)))
-				xvec := Xs[i]
-				yvec := yvecHelper(xvec, i, p)
-				nn.forward(xvec)
-				cbatch += nn.costfunction(yvec)
-			}
-			cost += (cbatch + creg) / float64(batchsize)
-		}
-		if math.Abs(cost) < math.MaxInt16 {
-			cost /= float64(numbatches)
-			if cost <= p.maxcost {
-				converged |= ConvergedCost
-			}
-			if trace_cost {
-				log.Print(nn.nbackprops, fmt.Sprintf(" c %f", cost))
-			}
-		}
-	}
-	return converged
+	return ttp.testRandomBatch(Xs, converged, nbp)
 }
 
-func (nn *NeuNetwork) gradnormHelper(gratrack []float64) {
-	layer := nn.layers[nn.lastidx-1] // the last hidden layer, next to the output
-	edist0 := normL2Matrix(layer.gradient, nil)
-	shiftVector(gratrack)
-	pushVector(gratrack, edist0)
-}
-
-func (nn *NeuNetwork) weightdeltaBefore() [][]float64 {
-	layer := nn.layers[nn.lastidx-1] // the last hidden layer, next to the output
-	prew := cloneMatrix(layer.weights)
-	return prew
-}
-
-func (nn *NeuNetwork) weightdeltaAfter(weitrack []float64, prew [][]float64) {
-	layer := nn.layers[nn.lastidx-1] // last hidden
-	edist := normL2Matrix(prew, layer.weights)
-	shiftVector(weitrack)
-	pushVector(weitrack, edist)
-}
-
-func yvecHelper(xvec []float64, i int, p TrainParams) []float64 {
-	var yvec []float64
-	switch {
-	case p.resultset != nil:
-		yvec = p.resultset[i]
-	case p.resultvalcb != nil:
-		yvec = p.resultvalcb(xvec)
-	case p.resultidxcb != nil:
-		yvec = p.resultidxcb(i)
-	}
-	return yvec
-}
-
-func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
-	assert(p.resultset != nil || p.resultvalcb != nil || p.resultidxcb != nil)
+func (nn *NeuNetwork) Pretrain(Xs [][]float64, ttp *TTP) {
 	nn_orig := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables)
 	nn_optm := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables)
 	nn_orig.copyNetwork(nn)
@@ -338,7 +352,7 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 	step := 0
 	for step < numsteps {
 		for i, xvec := range Xs {
-			yvec := yvecHelper(xvec, i, p)
+			yvec := ttp.getYvec(xvec, i)
 			copyVector(trainingX[step], xvec)
 			copyVector(trainingY[step], yvec)
 			step++
@@ -350,7 +364,7 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 	j := 0
 	for i := len(Xs) - 1; i >= 0; i-- {
 		xvec := Xs[i]
-		yvec := yvecHelper(xvec, i, p)
+		yvec := ttp.getYvec(xvec, i)
 		copyVector(testingX[j], xvec)
 		copyVector(testingY[j], yvec)
 		j++
@@ -371,12 +385,12 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 				nn.tunables.alpha = alpha
 				nn.tunables.gdalgscopeall = scope
 				// use the training set
-				nn.Train(trainingX, TrainParams{resultset: trainingY})
+				nn.Train(trainingX, &TTP{resultset: trainingY})
 				// use the testing set to calc the cost
 				cost := 0.0
 				for i, xvec := range testingX {
 					yvec := testingY[i]
-					nn.forward(xvec)
+					nn.nnint.forward(xvec)
 					cost += nn.costfunction(yvec)
 				}
 				cost /= float64(len(testingX))
@@ -392,34 +406,4 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, p TrainParams) {
 	nn.copyNetwork(nn_optm)
 	fmt.Println("pre-train cost:", avgcost)
 	fmt.Println("pre-train conf:", nn.tunables)
-}
-
-// debug
-func logWei(iter int, weitrack []float64) {
-	var w string = " w"
-	for j := 0; j < len(weitrack); j++ {
-		if weitrack[j] == 0 {
-			continue
-		}
-		w += fmt.Sprintf(" %.6f", weitrack[j])
-	}
-	log.Print(iter, w)
-}
-
-func logGra(iter int, gratrack []float64) {
-	var g string = " g"
-	for j := 0; j < len(gratrack); j++ {
-		if gratrack[j] == 0 {
-			continue
-		}
-		g += fmt.Sprintf(" %.6f", gratrack[j])
-	}
-	log.Print(iter, g)
-}
-
-func max(a int, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }

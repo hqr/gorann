@@ -31,8 +31,9 @@ func Test_bitoutput(t *testing.T) {
 		}
 	}
 	converged := 0
+	ttp := &TTP{nn: nn, resultvalcb: xor8bits, pct: 50, maxcost: 0.3, maxbackprops: 1E6}
 	for converged == 0 {
-		converged = nn.Train(Xs, TrainParams{resultvalcb: xor8bits, testingpct: 50, maxcost: 0.3, maxbackprops: 1E6})
+		converged = nn.Train(Xs, ttp)
 	}
 	if converged&ConvergedMaxBackprops > 0 {
 		t.Errorf("reached the maximum number of back propagations (%d)\n", nn.nbackprops)
@@ -77,13 +78,14 @@ func Test_classify(t *testing.T) {
 		return y
 	}
 	Xs := newMatrix(200, 2)
+	ttp := &TTP{nn: nn, resultvalcb: xorclassify, pct: 50, maxcost: 0.4, maxbackprops: 5E6}
 	for i := 0; i < len(Xs); i++ {
 		Xs[i][0] = float64(rand.Int31n(maxint))
 		Xs[i][1] = float64(rand.Int31n(maxint))
 	}
 	converged := 0
 	for converged == 0 {
-		converged = nn.Train(Xs, TrainParams{resultvalcb: xorclassify, testingpct: 50, maxcost: 0.4, maxbackprops: 5E6})
+		converged = nn.Train(Xs, ttp)
 	}
 	var crossen, mse float64
 	for k := 0; k < 8; k++ {
