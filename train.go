@@ -1,7 +1,6 @@
 package gorann
 
 import (
-	"flag"
 	"fmt"
 	"log"
 	"math"
@@ -17,14 +16,6 @@ const (
 	ConvergedGradient
 	ConvergedMaxBackprops
 )
-
-type CommandLine struct {
-	tracenumbp int
-	tracecost  bool
-	checkgrads bool
-}
-
-var cli = CommandLine{}
 
 //===========================================================================
 //
@@ -178,19 +169,6 @@ func (ttp *TTP) testRandomBatch(Xs [][]float64, cnv int, nbp int) int {
 	return cnv
 }
 
-//
-// init
-//
-func init() {
-	flag.IntVar(&cli.tracenumbp, "nbp", 0, "trace interval")
-	flag.BoolVar(&cli.checkgrads, "grad", false, "check gradients every \"trace interval\"")
-	flag.BoolVar(&cli.tracecost, "cost", false, "trace cost every \"trace interval\"")
-
-	flag.Parse()
-	assert(!cli.checkgrads || cli.tracenumbp > 0)
-	assert(!cli.tracecost || cli.tracenumbp > 0)
-}
-
 //===========================================================================
 //
 // nn training/testing methods
@@ -211,66 +189,88 @@ func (nn *NeuNetwork) Predict(xvec []float64) []float64 {
 func (nn *NeuNetwork) CheckGradients(yvec []float64) {
 	const eps = GRADCHECK_eps
 	const eps2 = eps * 2
+	maxdiff, ll, ii, jj, nfail := 0.0, 0, 0, 0, 0
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		next := layer.next
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
-				layer.weights[i][j] += eps
+				w := layer.weights[i][j]
+				wplus, wminus := w+eps, w-eps
+
+				layer.weights[i][j] = wplus
 				nn.nnint.reForward()
 				costplus := nn.costfunction(yvec)
 
-				layer.weights[i][j] -= eps2
+				layer.weights[i][j] = wminus
 				nn.nnint.reForward()
 				costminus := nn.costfunction(yvec)
 
-				layer.weights[i][j] += eps // restore
+				layer.weights[i][j] = w
 				// including the cost contributed by regularization
 				gradij := (costplus - costminus + nn.costl2regeps(l, i, j, eps)) / eps2
 
 				diff := math.Abs(gradij - layer.gradient[i][j])
 				if diff > eps2 {
-					log.Print("grad-check-failed", fmt.Sprintf("[%2d=>(%2d->%2d)] %.4e", l, i, j, diff))
+					nfail++
+					if diff > maxdiff {
+						maxdiff = diff
+						ll, ii, jj = l, i, j
+
+					}
 				}
 			}
 		}
 
 	}
+	if nfail > 0 {
+		log.Print("grad-check: ", nn.nbackprops, nfail, fmt.Sprintf(" [%2d=>(%2d->%2d)] %.4e", ll, ii, jj, maxdiff))
+	}
 }
 
 func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, ttp *TTP, idxbase int) {
-	assert(len(xbatch) == ttp.batchsize)
+	assert(len(xbatch) == batchsize)
 	const eps = GRADCHECK_eps
 	const eps2 = eps * 2
+	maxdiff, ll, ii, jj, nfail := 0.0, 0, 0, 0, 0
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		next := layer.next
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
 				var costplus, costminus float64
-				for k := 0; k < ttp.batchsize; k++ {
+				w := layer.weights[i][j]
+				wplus, wminus := w+eps, w-eps
+				for k := 0; k < batchsize; k++ {
 					xvec := xbatch[k]
 					yvec := ttp.getYvec(xvec, idxbase+k)
 
-					layer.weights[i][j] += eps
+					layer.weights[i][j] = wplus
 					nn.nnint.forward(xvec)
 					costplus += nn.costfunction(yvec)
 
-					layer.weights[i][j] -= eps2
+					layer.weights[i][j] = wminus
 					nn.nnint.reForward()
 					costminus += nn.costfunction(yvec)
-
-					layer.weights[i][j] += eps // restore
 				}
+				layer.weights[i][j] = w
 				// including the cost contributed by L2 regularization
-				gradij := (costplus - costminus + nn.costl2regeps(l, i, j, eps)) / float64(ttp.batchsize) / eps2
+				gradij := (costplus - costminus + nn.costl2regeps(l, i, j, eps)) / float64(batchsize) / eps2
 				diff := math.Abs(gradij - layer.gradient[i][j])
 				if diff > eps2 {
-					log.Print("grad-batch-failed", fmt.Sprintf("[%2d=>(%2d->%2d)] %.4e", l, i, j, diff))
+					nfail++
+					if diff > maxdiff {
+						maxdiff = diff
+						ll, ii, jj = l, i, j
+
+					}
 				}
 			}
 		}
 
+	}
+	if nfail > 0 {
+		log.Print("grad-batch: ", nn.nbackprops, nfail, fmt.Sprintf(" [%2d=>(%2d->%2d)] %.4e", ll, ii, jj, maxdiff))
 	}
 }
 
@@ -303,13 +303,14 @@ func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP) int {
 			if batchsize == 1 {
 				nn.CheckGradients(yvec)
 			} else {
-				nn.CheckGradients_Batch(Xs[i-batchsize+1:i+1], batchsize, ttp, i-batchsize+1)
+				idxbase := i - batchsize + 1
+				nn.CheckGradients_Batch(Xs[idxbase:i+1], batchsize, ttp, idxbase)
 			}
 		}
 		nn.nnint.fixWeights(batchsize) // <============== (2)
 		ttp.weightdeltaAfter()
 		bi = 0
-		if i+batchsize >= m {
+		if batchsize > m-i-1 {
 			batchsize = m - i - 1
 		}
 	}

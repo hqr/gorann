@@ -113,6 +113,22 @@ func (nn *NeuNetwork) initunables() {
 	if len(nn.tunables.costfname) == 0 {
 		nn.tunables.costfname = CostMse
 	}
+	// apply CLI: override defaults and hardcodings
+	if cli.alpha > 0 {
+		nn.tunables.alpha = cli.alpha
+	}
+	if cli.momentum > 0 {
+		nn.tunables.momentum = cli.momentum
+	}
+	if cli.lambda > 0 {
+		nn.tunables.lambda = cli.lambda
+	}
+	if cli.batchsize > 0 {
+		nn.tunables.batchsize = cli.batchsize
+	}
+	if len(cli.gdalgname) > 0 {
+		nn.tunables.gdalgname = cli.gdalgname
+	}
 }
 
 func (nn *NeuNetwork) reset() {

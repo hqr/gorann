@@ -1,5 +1,9 @@
 package gorann
 
+import (
+	"flag"
+)
+
 type NeuLayerConfig struct {
 	actfname string // activation function (non-linearity) used for a given layer
 	size     int    // number of nodes ("neurons") comprising the layer
@@ -78,4 +82,39 @@ type NeuTunables struct {
 	gdalgname     string // gradient descent optimization algorithm (see above)
 	gdalgscopeall bool   // whether to apply optimization algorithm to all layers or just the one facing output
 	batchsize     int    // gradient descent: BatchSGD | BatchTrainingSet | minibatch
+}
+
+//
+// CLI
+//
+type CommandLine struct {
+	// override nn props hardcoded via the corresponding c-tors
+	// value 0 (zero) or "" is interpreted as not-set
+	alpha     float64
+	momentum  float64
+	lambda    float64
+	gdalgname string
+	batchsize int
+	// tracing and logging
+	tracenumbp int
+	tracecost  bool
+	checkgrads bool
+}
+
+var cli = CommandLine{}
+
+func init() {
+	flag.Float64Var(&cli.alpha, "alpha", 0, "learning rate: controls the rate at which current changes influence next-updates")
+	flag.Float64Var(&cli.momentum, "momentum", 0, "controls the second part in next-update formula: current-change + momentum * previous-update")
+	flag.Float64Var(&cli.lambda, "lambda", 0, "controls regularization term in the cost function")
+	flag.StringVar(&cli.gdalgname, "gdalgname", "", "optimization algorithm: [ Adagrad | Adadelta | RMSprop | ADAM | Rprop ]")
+	flag.IntVar(&cli.batchsize, "batchsize", 0, "as in: mini-batch gradient descent")
+
+	flag.IntVar(&cli.tracenumbp, "nbp", 0, "trace interval: the number of back propagations")
+	flag.BoolVar(&cli.checkgrads, "grad", false, "check gradients every \"trace interval\"")
+	flag.BoolVar(&cli.tracecost, "cost", false, "trace cost every \"trace interval\"")
+
+	flag.Parse()
+	assert(!cli.checkgrads || cli.tracenumbp > 0)
+	assert(!cli.tracecost || cli.tracenumbp > 0)
 }
