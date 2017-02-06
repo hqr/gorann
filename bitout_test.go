@@ -11,7 +11,7 @@ func Test_bitoutput(t *testing.T) {
 	input := NeuLayerConfig{size: 16}
 	hidden := NeuLayerConfig{"sigmoid", 16}
 	output := NeuLayerConfig{"sigmoid", 8}
-	nn := NewNeuNetwork(input, hidden, 3, output, NeuTunables{gdalgname: RMSprop})
+	nn := NewNeuNetwork(input, hidden, 3, output, &NeuTunables{gdalgname: RMSprop})
 	nn.initXavier()
 
 	xor8bits := func(xvec []float64) []float64 {
@@ -64,7 +64,7 @@ func Test_classify(t *testing.T) {
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"sigmoid", 20}
 	output := NeuLayerConfig{"softmax", nclasses}
-	nn := NewNeuNetwork(input, hidden, 2, output, NeuTunables{gdalgname: ADAM, costfname: CostCrossEntropy, batchsize: 10})
+	nn := NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, costfname: CostCrossEntropy, batchsize: 10})
 	maxint := int32(0xff)
 	normalize := func(vec []float64) {
 		divElemVector(vec, float64(maxint))

@@ -11,7 +11,8 @@ import (
 type NeuNetworkInterface interface {
 	forward(xvec []float64) []float64
 	reForward()
-	backprop(yvec []float64)
+	backpropDeltas(yvec []float64)
+	backpropGradients()
 	fixGradients(batchsize int)
 	fixWeights(batchsize int)
 }
@@ -23,7 +24,7 @@ type NeuNetwork struct {
 	cinput    NeuLayerConfig
 	chidden   NeuLayerConfig
 	coutput   NeuLayerConfig
-	tunables  NeuTunables
+	tunables  *NeuTunables
 	callbacks NeuCallbacks
 	//
 	layers     []*NeuLayer
@@ -53,7 +54,7 @@ type NeuLayer struct {
 }
 
 // c-tor
-func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, coutput NeuLayerConfig, tunables NeuTunables) *NeuNetwork {
+func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, coutput NeuLayerConfig, tunables *NeuTunables) *NeuNetwork {
 	nn := &NeuNetwork{cinput: cinput, chidden: chidden, coutput: coutput, tunables: tunables}
 	nn.nnint = nn
 	nn.lastidx = numhidden + 1
@@ -76,16 +77,15 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 		nn.layers[idx] = layer
 		prev = layer
 	}
+	// set  defaults (unless already defined)
+	nn.initunables()
+	// algorithm-specific hyper-params
+	nn.initgdalg()
+
 	for idx := 0; idx <= nn.lastidx; idx++ {
 		layer := nn.layers[idx]
 		layer.init(nn)
 	}
-	// set tunable defaults unless already defined
-	nn.initunables()
-
-	// algorithm-specific default hyper-params
-	nn.initgdalg(nn.tunables.gdalgname)
-
 	//
 	// other useful settings
 	//
@@ -100,7 +100,7 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 // methods
 //
 func (nn *NeuNetwork) initunables() {
-	//NeuTunables{alpha: DEFAULT_alpha, momentum: DEFAULT_momentum, batchsize: DEFAULT_batchsize, gdalgname: gdalgname, costfname: CostMse}
+	// defaults
 	if nn.tunables.alpha == 0 {
 		nn.tunables.alpha = DEFAULT_alpha
 	}
@@ -113,7 +113,7 @@ func (nn *NeuNetwork) initunables() {
 	if len(nn.tunables.costfname) == 0 {
 		nn.tunables.costfname = CostMse
 	}
-	// apply CLI: override defaults and hardcodings
+	// command-line: override defaults and hardcodings
 	if cli.alpha > 0 {
 		nn.tunables.alpha = cli.alpha
 	}
@@ -131,39 +131,39 @@ func (nn *NeuNetwork) initunables() {
 	}
 }
 
-func (nn *NeuNetwork) reset() {
-	nn.initgdalg(nn.tunables.gdalgname)
-	for l := 0; l < nn.lastidx; l++ {
-		layer := nn.layers[l]
-		fillVector(layer.avec, 1.0)
-		fillVector(layer.zvec, 1.0)
-		fillVector(layer.deltas, 0.0)
-		zeroMatrix(layer.gradient)
-		zeroMatrix(layer.pregradient)
-		zeroMatrix(layer.rmsgradient)
-	}
-}
-
-func (nn *NeuNetwork) copyNetwork(from *NeuNetwork) {
-	assert(nn.lastidx == from.lastidx)
-	copyStruct(nn.tunables, from.tunables)
-	for l := 0; l < nn.lastidx; l++ {
-		layer := nn.layers[l]
-		layer_from := from.layers[l]
-		assert(layer.config.size == layer_from.config.size)
-
-		copyMatrix(layer.weights, layer_from.weights)
+func (nn *NeuNetwork) initgdalg() {
+	gdalgname := nn.tunables.gdalgname
+	if gdalgname == ADAM {
+		nn.tunables.gdalgalpha = ADAM_alpha
+		nn.tunables.beta1 = ADAM_beta1
+		nn.tunables.beta2 = ADAM_beta2
+		nn.tunables.beta1_t = ADAM_beta1_t
+		nn.tunables.beta2_t = ADAM_beta2_t
+		nn.tunables.eps = ADAM_eps
+	} else if gdalgname == Rprop {
+		nn.tunables.eta = Rprop_eta
+		nn.tunables.neta = Rprop_neta
+	} else if gdalgname == Adagrad {
+		nn.tunables.eps = DEFAULT_eps
+	} else if gdalgname == Adadelta || gdalgname == RMSprop {
+		nn.tunables.eps = DEFAULT_eps
+		nn.tunables.gamma = DEFAULT_gamma
 	}
 }
 
 func (layer *NeuLayer) init(nn *NeuNetwork) {
-	layer.avec = newVector(layer.size, 1.0)
-	layer.zvec = newVector(layer.size, 1.0)
+	layer.avec = newVector(layer.size)
+	layer.zvec = newVector(layer.size)
 	layer.deltas = newVector(layer.size)
 	layer.nn = nn
 	if layer.next == nil {
 		assert(layer.config.actfname != "softmax" || nn.tunables.costfname == CostCrossEntropy, "softmax must be used with cross-entropy cost")
 		return
+	}
+	// bias
+	if layer.size > layer.config.size {
+		assert(layer.size == layer.config.size+1)
+		layer.avec[layer.config.size] = 1
 	}
 	// nor is it recommended
 	assert(layer.config.actfname != "softmax", "softmax activation for inner layers is currently not supported")
@@ -182,6 +182,53 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 	layer.gradient = newMatrix(layer.size, layer.next.size)
 	layer.pregradient = newMatrix(layer.size, layer.next.size)
 	layer.rmsgradient = newMatrix(layer.size, layer.next.size)
+	//
+	// auxiliary GD matrices (NOTE: gdalgname)
+	gdalgname := nn.tunables.gdalgname
+	if gdalgname == ADAM {
+		layer.avegradient = newMatrix(layer.size, layer.next.size)
+	} else if gdalgname == Adadelta {
+		layer.rmswupdates = newMatrix(layer.size, layer.next.size)
+	} else if gdalgname == Rprop {
+		layer.wupdates = newMatrix(layer.size, layer.next.size)
+	}
+}
+
+func (nn *NeuNetwork) reset() {
+	nn.initgdalg()
+	gdalgname := nn.tunables.gdalgname
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		fillVector(layer.avec, 0)
+		fillVector(layer.zvec, 0)
+		if layer.size > layer.config.size {
+			layer.avec[layer.config.size] = 1
+		}
+		fillVector(layer.deltas, 0.0)
+		zeroMatrix(layer.gradient)
+		zeroMatrix(layer.pregradient)
+		zeroMatrix(layer.rmsgradient)
+		// auxiliary matrices
+		if gdalgname == ADAM {
+			layer.avegradient = newMatrix(layer.size, layer.next.size)
+		} else if gdalgname == Adadelta {
+			layer.rmswupdates = newMatrix(layer.size, layer.next.size)
+		} else if gdalgname == Rprop {
+			layer.wupdates = newMatrix(layer.size, layer.next.size)
+		}
+	}
+}
+
+func (nn *NeuNetwork) copyNetwork(from *NeuNetwork) {
+	assert(nn.lastidx == from.lastidx)
+	copyStruct(nn.tunables, from.tunables)
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		layer_from := from.layers[l]
+		assert(layer.config.size == layer_from.config.size)
+
+		copyMatrix(layer.weights, layer_from.weights)
+	}
 }
 
 // Xavier et al at http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
@@ -196,35 +243,6 @@ func (nn *NeuNetwork) initXavier() {
 			for j := 0; j < next.size; j++ {
 				layer.weights[i][j] = d*rand.Float64() - u
 			}
-		}
-	}
-}
-
-func (nn *NeuNetwork) initgdalg(gdalgname string) {
-	if gdalgname == ADAM {
-		nn.tunables.gdalgalpha = ADAM_alpha
-		nn.tunables.beta1 = ADAM_beta1
-		nn.tunables.beta2 = ADAM_beta2
-		nn.tunables.beta1_t = ADAM_beta1_t
-		nn.tunables.beta2_t = ADAM_beta2_t
-		nn.tunables.eps = ADAM_eps
-	} else if gdalgname == Rprop {
-		nn.tunables.eta = Rprop_eta
-		nn.tunables.neta = Rprop_neta
-	} else if gdalgname == Adagrad {
-		nn.tunables.eps = DEFAULT_eps
-	} else if gdalgname == Adadelta || gdalgname == RMSprop {
-		nn.tunables.eps = DEFAULT_eps
-		nn.tunables.gamma = DEFAULT_gamma
-	}
-	for l := 0; l < nn.lastidx; l++ {
-		layer := nn.layers[l]
-		if gdalgname == ADAM {
-			layer.avegradient = newMatrix(layer.size, layer.next.size)
-		} else if gdalgname == Adadelta {
-			layer.rmswupdates = newMatrix(layer.size, layer.next.size)
-		} else if gdalgname == Rprop {
-			layer.wupdates = newMatrix(layer.size, layer.next.size)
 		}
 	}
 }
@@ -274,8 +292,7 @@ func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
 	}
 }
 
-// see for instance https://web.stanford.edu/class/cs294a/sparseAutoencoder_2011new.pdf
-func (nn *NeuNetwork) backprop(yvec []float64) {
+func (nn *NeuNetwork) backpropDeltas(yvec []float64) {
 	assert(len(yvec) == nn.coutput.size)
 	outputL := nn.layers[nn.lastidx]
 	cname, aname := nn.tunables.costfname, outputL.config.actfname
@@ -321,11 +338,13 @@ func (nn *NeuNetwork) backprop(yvec []float64) {
 			}
 		}
 	}
-	//
-	// use deltas to recompute weight gradients
-	//
-	for l := 0; l < nn.lastidx; l++ {
-		layer := nn.layers[l]
+}
+
+//
+// use the deltas (above) to recompute weight gradients
+//
+func (nn *NeuNetwork) backpropGradients() {
+	for layer := nn.layers[0]; layer.next != nil; layer = layer.next {
 		next := layer.next
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
@@ -340,8 +359,7 @@ func (nn *NeuNetwork) backprop(yvec []float64) {
 //
 func (nn *NeuNetwork) fixGradients(batchsize int) {
 	if batchsize > 1 {
-		for l := 0; l < nn.lastidx; l++ {
-			layer := nn.layers[l]
+		for layer := nn.layers[0]; layer.next != nil; layer = layer.next {
 			divElemMatrix(layer.gradient, float64(batchsize))
 		}
 	}
@@ -353,15 +371,14 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 		nn.tunables.beta1_t *= nn.tunables.beta1
 		nn.tunables.beta2_t *= nn.tunables.beta2
 	}
-	for l := 0; l < nn.lastidx; l++ {
-		layer := nn.layers[l]
+	for layer := nn.layers[0]; layer.next != nil; layer = layer.next {
 		next := layer.next
 		// move the weights in the direction opposite to the corresponding gradient vectors
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
 				// l-th layer, i-th neuron, j-th synapse
 				var weightij float64
-				if l == nn.lastidx-1 || nn.tunables.gdalgscopeall {
+				if layer.idx == nn.lastidx-1 || nn.tunables.gdalgscopeall {
 					switch nn.tunables.gdalgname {
 					case Adagrad:
 						weightij = layer.weightij_Adagrad(i, j)
@@ -472,7 +489,8 @@ func (layer *NeuLayer) weightij_ADAM(i int, j int) float64 {
 		layer.avegradient[i][j] = nn.tunables.beta1*layer.avegradient[i][j] + (1-nn.tunables.beta1)*layer.gradient[i][j]
 		layer.rmsgradient[i][j] = nn.tunables.beta2*layer.rmsgradient[i][j] + (1-nn.tunables.beta2)*math.Pow(layer.gradient[i][j], 2)
 		alpha *= math.Sqrt(1-nn.tunables.beta2_t) / (1 - nn.tunables.beta1_t)
-		weightij = weightij - alpha*layer.avegradient[i][j]/(math.Sqrt(layer.rmsgradient[i][j])+nn.tunables.eps)
+		div := math.Sqrt(layer.rmsgradient[i][j]) + nn.tunables.eps
+		weightij = weightij - alpha*layer.avegradient[i][j]/div
 	}
 	return weightij
 }

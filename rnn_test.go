@@ -12,10 +12,11 @@ func Test_pcavg(t *testing.T) {
 	input := NeuLayerConfig{size: 1}
 	hidden := NeuLayerConfig{"sigmoid", 4} // tanh
 	output := NeuLayerConfig{"sigmoid", 1}
-	rnn := NewNaiveRnn(input, hidden, 2, output, NeuTunables{gdalgname: RMSprop, batchsize: 10})
+	rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10, gdalgscopeall: true})
 	rnn.initXavier()
+	rnn.layers[1].config.actfname = "tanh"
 	// rnn.tunables.momentum = 0
-	ntrain, ntest := 1000, 8
+	ntrain, ntest := 2000, 8
 	Xs, Ys := newMatrix(ntrain+ntest, 1), newMatrix(ntrain+ntest, 1)
 	Xs[0][0], Ys[0][0] = rand.Float64(), Xs[0][0]/2
 	for i := 1; i < len(Xs); i++ {
@@ -23,7 +24,7 @@ func Test_pcavg(t *testing.T) {
 		Ys[i][0] = (Xs[i-1][0] + Xs[i][0]) / 2
 	}
 	converged := 0
-	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxgradnorm: 0.06, maxbackprops: 5E6, seqtail: true}
+	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
 	for converged == 0 {
 		converged = rnn.Train(Xs[:ntrain], ttp)
 	}
@@ -37,5 +38,40 @@ func Test_pcavg(t *testing.T) {
 	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.nbackprops/1000)
 	if converged&ConvergedMaxBackprops > 0 {
 		t.Errorf("reached the maximum number of back propagations (%dK)\n", rnn.nbackprops/1000)
+	}
+}
+
+// exponential moving average (EMA)
+func Test_emavg(t *testing.T) {
+	rand.Seed(0)
+	input := NeuLayerConfig{size: 1}
+	hidden := NeuLayerConfig{"sigmoid", 4} // tanh
+	output := NeuLayerConfig{"sigmoid", 1}
+	rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 1, gdalgscopeall: true})
+	rnn.layers[1].config.actfname = "tanh"
+	rnn.initXavier()
+
+	ntrain, ntest, alph := 8000, 8, 0.6
+	Xs, Ys := newMatrix(ntrain+ntest, 1), newMatrix(ntrain+ntest, 1)
+	Xs[0][0] = rand.Float64()
+	for i := 1; i < len(Xs); i++ {
+		Xs[i][0] = rand.Float64()
+		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[i-1][0]
+	}
+	converged := 0
+	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
+	for converged == 0 {
+		converged = rnn.Train(Xs[:ntrain], ttp)
+	}
+	mse := 0.0
+	for i := 0; i < ntest; i++ {
+		j := ntrain + i
+		avec := rnn.Predict(Xs[j])
+		mse += rnn.CostMse(Ys[j])
+		fmt.Printf("%.1f*%.2f + %.1f*%.2f -> %.2f : %.2f\n", alph, Xs[j][0], (1 - alph), Ys[j-1][0], avec[0], Ys[j][0])
+	}
+	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.nbackprops/1000)
+	if converged&ConvergedCost == 0 {
+		t.Errorf("failed to converge on cost (%d, %e)\n", converged, ttp.maxcost)
 	}
 }

@@ -32,11 +32,14 @@ type TTP struct {
 	// repeat training set so many times
 	repeat int
 	// testing policy
-	pct       int  // %% of the training set for testing
-	num       int  // number of training instances used for --/--
-	randbatch bool // test random batches selected out of the training set
-	seqtail   bool // do not use the "tail" of the training set for training, rather use it for testing only
-	batchsize int  // based on the size of the training set and the network tunable
+	pct int // %% of the training set for testing
+	num int // number of training instances used for --/--
+	// the following option is useful for time series, for instance
+	// instead of selecting random batches out of the training set
+	// test cost and check-gradients inline with the training, i. e., sequentially
+	sequential bool
+	//
+	batchsize int // based on the size of the training set and the network tunable
 	// converged? bitwise sum of conditions below
 	// note: Train() routine exits on whatever comes first
 	maxweightdelta float64 // L2 norm(previous-weights - current-weights)
@@ -54,8 +57,8 @@ func (ttp *TTP) init(m int) {
 	assert(ttp.nn != nil)
 	assert(ttp.resultset == nil || len(ttp.resultset) == m)
 	assert(ttp.resultset != nil || ttp.resultvalcb != nil || ttp.resultidxcb != nil)
-	if !ttp.seqtail {
-		ttp.randbatch = true
+	if ttp.sequential {
+		assert(ttp.repeat < 2, "cannot repeat time series and such")
 	}
 	if ttp.pct == 0 && ttp.num == 0 {
 		ttp.pct = 30
@@ -65,6 +68,9 @@ func (ttp *TTP) init(m int) {
 	ttp.batchsize = ttp.nn.tunables.batchsize
 	if ttp.batchsize < 0 || ttp.batchsize > m {
 		ttp.batchsize = m
+	}
+	if ttp.batchsize > 1 && ttp.sequential && cli.checkgrad {
+		assert(false, "cannot execute gradient checking inline with mini-batch GD: NIY")
 	}
 	ttp.weitrack = newVector(10, 1000.0)
 	ttp.gratrack = newVector(10, 1000.0)
@@ -128,15 +134,13 @@ func (ttp *TTP) converged() (cnv int) {
 }
 
 func (ttp *TTP) testRandomBatch(Xs [][]float64, cnv int, nbp int) int {
-	if !ttp.randbatch {
-		return cnv
-	}
+	assert(!ttp.sequential)
 	nn, m, num := ttp.nn, len(Xs), ttp.num
 	if num == 0 {
 		num = m * ttp.pct / 100
 	}
-	trace_cost := cli.tracenumbp > 0 && cli.tracecost && (nn.nbackprops/cli.tracenumbp > nbp/cli.tracenumbp)
-	if ttp.maxcost == 0 && !trace_cost {
+	trace_rand_cost := cli.tracecost && (nn.nbackprops/cli.nbp > nbp/cli.nbp)
+	if ttp.maxcost == 0 && !trace_rand_cost {
 		return cnv
 	}
 	// round up
@@ -159,10 +163,10 @@ func (ttp *TTP) testRandomBatch(Xs [][]float64, cnv int, nbp int) int {
 	}
 	if math.Abs(cost) < math.MaxInt16 {
 		cost /= float64(numbatches)
-		if cost < ttp.maxcost {
+		if ttp.maxcost > 0 && cost < ttp.maxcost {
 			cnv |= ConvergedCost
 		}
-		if trace_cost {
+		if trace_rand_cost {
 			log.Print(nn.nbackprops, fmt.Sprintf(" c %f", cost))
 		}
 	}
@@ -284,14 +288,19 @@ func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.normcbY(ynorm)
 	}
-	nn.nnint.backprop(ynorm)
+	nn.nnint.backpropDeltas(ynorm)
+	nn.nnint.backpropGradients()
 }
 
-func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP) int {
-	m, bi, batchsize := len(Xs), 0, ttp.batchsize
+func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP, seqnum int) int {
+	m, bi, batchsize, cost := len(Xs), 0, ttp.batchsize, 0.0
 	for i, xvec := range Xs {
 		yvec := ttp.getYvec(xvec, i)
 		nn.TrainStep(xvec, yvec)
+		// sequentially cost-estimate the last 'seqnum' examples
+		if seqnum > m-i-1 {
+			cost += nn.costfunction(yvec)
+		}
 		bi++
 		if bi < batchsize {
 			continue
@@ -299,10 +308,10 @@ func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP) int {
 		ttp.gradnormTracker()
 		ttp.weightdeltaBefore()
 		nn.nnint.fixGradients(batchsize) // <============== (1)
-		if cli.checkgrads && (cli.tracenumbp > 0 && nn.nbackprops%cli.tracenumbp == 0) {
+		if cli.checkgrad && nn.nbackprops%cli.nbp == 0 {
 			if batchsize == 1 {
 				nn.CheckGradients(yvec)
-			} else {
+			} else if !ttp.sequential {
 				idxbase := i - batchsize + 1
 				nn.CheckGradients_Batch(Xs[idxbase:i+1], batchsize, ttp, idxbase)
 			}
@@ -314,16 +323,37 @@ func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP) int {
 			batchsize = m - i - 1
 		}
 	}
-	return ttp.converged()
+	cnv := ttp.converged()
+	if seqnum > 0 {
+		cost /= float64(seqnum)
+		if cli.tracecost {
+			log.Print(nn.nbackprops, fmt.Sprintf(" c %f", cost))
+		}
+		if ttp.maxcost > 0 && cost < ttp.maxcost {
+			cnv |= ConvergedCost
+		}
+	}
+	return cnv
 }
 
 func (nn *NeuNetwork) Train(Xs [][]float64, ttp *TTP) int {
-	converged, nbp := 0, nn.nbackprops
+	converged, nbp, m, seqnum := 0, nn.nbackprops, len(Xs), 0
 	ttp.init(len(Xs))
-	//
-	// do the training
+	if ttp.sequential {
+		// set 'seqnum' to trace cost and/or check cost convergence
+		if (ttp.maxcost > 0 || cli.tracecost) && (nn.nbackprops+m)/cli.nbp > nbp/cli.nbp {
+			seqnum = ttp.num
+			if seqnum == 0 {
+				seqnum = m * ttp.pct / 100
+			}
+		}
+		return nn.TrainSet(Xs, ttp, seqnum)
+		//
+		// TODO: perform grad check inline with the last batch of the set
+		//
+	}
 	for k := 0; k < ttp.repeat && converged == 0; k++ {
-		converged = nn.TrainSet(Xs, ttp)
+		converged = nn.TrainSet(Xs, ttp, seqnum)
 	}
 	// 1. test using a random subset of the training data
 	// 2. check convergence on cost
@@ -382,7 +412,7 @@ func (nn *NeuNetwork) Pretrain(Xs [][]float64, ttp *TTP) {
 				nn.copyNetwork(nn_orig)
 				// set new tunables and config
 				nn.tunables.gdalgname = alg
-				nn.initgdalg(alg)
+				nn.initgdalg()
 				nn.tunables.alpha = alpha
 				nn.tunables.gdalgscopeall = scope
 				// use the training set

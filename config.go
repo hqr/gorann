@@ -96,9 +96,9 @@ type CommandLine struct {
 	gdalgname string
 	batchsize int
 	// tracing and logging
-	tracenumbp int
-	tracecost  bool
-	checkgrads bool
+	nbp       int
+	tracecost bool
+	checkgrad bool
 }
 
 var cli = CommandLine{}
@@ -110,11 +110,9 @@ func init() {
 	flag.StringVar(&cli.gdalgname, "gdalgname", "", "optimization algorithm: [ Adagrad | Adadelta | RMSprop | ADAM | Rprop ]")
 	flag.IntVar(&cli.batchsize, "batchsize", 0, "as in: mini-batch gradient descent")
 
-	flag.IntVar(&cli.tracenumbp, "nbp", 0, "trace interval: the number of back propagations")
-	flag.BoolVar(&cli.checkgrads, "grad", false, "check gradients every \"trace interval\"")
-	flag.BoolVar(&cli.tracecost, "cost", false, "trace cost every \"trace interval\"")
+	flag.IntVar(&cli.nbp, "nbp", 100000, "trace interval: the number of back propagations (default 100000)")
+	flag.BoolVar(&cli.checkgrad, "checkgrad", false, "check gradients every \"trace interval\"")
+	flag.BoolVar(&cli.tracecost, "tracecost", false, "trace cost every \"trace interval\"")
 
 	flag.Parse()
-	assert(!cli.checkgrads || cli.tracenumbp > 0)
-	assert(!cli.tracecost || cli.tracenumbp > 0)
 }
