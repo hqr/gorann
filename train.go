@@ -55,7 +55,7 @@ type TTP struct {
 // set defaults
 func (ttp *TTP) init(m int) {
 	assert(ttp.nn != nil)
-	assert(ttp.resultset == nil || len(ttp.resultset) == m)
+	assert(ttp.resultset == nil || len(ttp.resultset) >= m)
 	assert(ttp.resultset != nil || ttp.resultvalcb != nil || ttp.resultidxcb != nil)
 	if ttp.sequential {
 		assert(ttp.repeat < 2, "cannot repeat time series and such")
@@ -68,9 +68,6 @@ func (ttp *TTP) init(m int) {
 	ttp.batchsize = ttp.nn.tunables.batchsize
 	if ttp.batchsize < 0 || ttp.batchsize > m {
 		ttp.batchsize = m
-	}
-	if ttp.batchsize > 1 && ttp.sequential && cli.checkgrad {
-		assert(false, "cannot execute gradient checking inline with mini-batch GD: NIY")
 	}
 	ttp.weitrack = newVector(10, 1000.0)
 	ttp.gratrack = newVector(10, 1000.0)
@@ -188,55 +185,11 @@ func (nn *NeuNetwork) Predict(xvec []float64) []float64 {
 	return ynorm
 }
 
-// must be called right after the backprop pass
-// (in other words, assumes all the gradients[][][] to be updated)
-func (nn *NeuNetwork) CheckGradients(yvec []float64) {
+// check gradients for an already back-propagated mini-batch
+func (nn *NeuNetwork) CheckGradientsAfterBp(xbatch [][]float64, ttp *TTP, idxbase int) {
 	const eps = GRADCHECK_eps
 	const eps2 = eps * 2
-	maxdiff, ll, ii, jj, nfail := 0.0, 0, 0, 0, 0
-	for l := 0; l < nn.lastidx; l++ {
-		layer := nn.layers[l]
-		next := layer.next
-		for i := 0; i < layer.size; i++ {
-			for j := 0; j < next.size; j++ {
-				w := layer.weights[i][j]
-				wplus, wminus := w+eps, w-eps
-
-				layer.weights[i][j] = wplus
-				nn.nnint.reForward()
-				costplus := nn.costfunction(yvec)
-
-				layer.weights[i][j] = wminus
-				nn.nnint.reForward()
-				costminus := nn.costfunction(yvec)
-
-				layer.weights[i][j] = w
-				// including the cost contributed by regularization
-				gradij := (costplus - costminus + nn.costl2regeps(l, i, j, eps)) / eps2
-
-				diff := math.Abs(gradij - layer.gradient[i][j])
-				if diff > eps2 {
-					nfail++
-					if diff > maxdiff {
-						maxdiff = diff
-						ll, ii, jj = l, i, j
-
-					}
-				}
-			}
-		}
-
-	}
-	if nfail > 0 {
-		log.Print("grad-check: ", nn.nbackprops, nfail, fmt.Sprintf(" [%2d=>(%2d->%2d)] %.4e", ll, ii, jj, maxdiff))
-	}
-}
-
-func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, ttp *TTP, idxbase int) {
-	assert(len(xbatch) == batchsize)
-	const eps = GRADCHECK_eps
-	const eps2 = eps * 2
-	maxdiff, ll, ii, jj, nfail := 0.0, 0, 0, 0, 0
+	maxdiff, ll, ii, jj, nfail, ntotal, batchsize := 0.0, 0, 0, 0, 0, 0, len(xbatch)
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		next := layer.next
@@ -250,7 +203,11 @@ func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, tt
 					yvec := ttp.getYvec(xvec, idxbase+k)
 
 					layer.weights[i][j] = wplus
-					nn.nnint.forward(xvec)
+					if batchsize == 1 {
+						nn.nnint.reForward()
+					} else {
+						nn.nnint.forward(xvec)
+					}
 					costplus += nn.costfunction(yvec)
 
 					layer.weights[i][j] = wminus
@@ -261,6 +218,7 @@ func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, tt
 				// including the cost contributed by L2 regularization
 				gradij := (costplus - costminus + nn.costl2regeps(l, i, j, eps)) / float64(batchsize) / eps2
 				diff := math.Abs(gradij - layer.gradient[i][j])
+				ntotal++
 				if diff > eps2 {
 					nfail++
 					if diff > maxdiff {
@@ -274,8 +232,41 @@ func (nn *NeuNetwork) CheckGradients_Batch(xbatch [][]float64, batchsize int, tt
 
 	}
 	if nfail > 0 {
-		log.Print("grad-batch: ", nn.nbackprops, nfail, fmt.Sprintf(" [%2d=>(%2d->%2d)] %.4e", ll, ii, jj, maxdiff))
+		log.Print("grad-check: ", nn.nbackprops, fmt.Sprintf(" %d/%d [%2d=>(%2d->%2d)] %.4e", nfail, ntotal, ll, ii, jj, maxdiff))
 	}
+}
+
+// check gradients for a selected weight inline with processing a given (next) mini-batch
+func (nn *NeuNetwork) Train_and_CheckGradients(xbatch [][]float64, ttp *TTP, idxbase int, l, i, j int) {
+	const eps = GRADCHECK_eps
+	const eps2 = eps * 2
+	batchsize, layer, costplus, costminus := len(xbatch), nn.layers[l], 0.0, 0.0
+	w := layer.weights[i][j]
+	wplus, wminus := w+eps, w-eps
+	for k := 0; k < batchsize; k++ {
+		xvec := xbatch[k]
+		yvec := ttp.getYvec(xvec, idxbase+k)
+		nn.TrainStep(xvec, yvec)
+
+		layer.weights[i][j] = wplus
+		nn.nnint.reForward()
+		costplus += nn.costfunction(yvec)
+
+		layer.weights[i][j] = wminus
+		nn.nnint.reForward()
+		costminus += nn.costfunction(yvec)
+	}
+	layer.weights[i][j] = w
+
+	nn.nnint.fixGradients(batchsize) // <============== (1)
+
+	// including the cost contributed by L2 regularization
+	gradij := (costplus - costminus + nn.costl2regeps(l, i, j, eps)) / float64(batchsize) / eps2
+	diff := math.Abs(gradij - layer.gradient[i][j])
+	if diff > eps2 {
+		log.Print("grad-batch: ", nn.nbackprops, fmt.Sprintf(" [%2d=>(%2d->%2d)] %.4e", l, i, j, diff))
+	}
+	nn.nnint.fixWeights(batchsize) // <============== (2)
 }
 
 func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
@@ -292,13 +283,13 @@ func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
 	nn.nnint.backpropGradients()
 }
 
-func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP, seqnum int) int {
+func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP, costnum int) int {
 	m, bi, batchsize, cost := len(Xs), 0, ttp.batchsize, 0.0
 	for i, xvec := range Xs {
 		yvec := ttp.getYvec(xvec, i)
 		nn.TrainStep(xvec, yvec)
-		// sequentially cost-estimate the last 'seqnum' examples
-		if seqnum > m-i-1 {
+		// costnum > 0: cumulative cost of the last so-many examples in the set
+		if costnum > m-i-1 {
 			cost += nn.costfunction(yvec)
 		}
 		bi++
@@ -308,13 +299,9 @@ func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP, seqnum int) int {
 		ttp.gradnormTracker()
 		ttp.weightdeltaBefore()
 		nn.nnint.fixGradients(batchsize) // <============== (1)
-		if cli.checkgrad && nn.nbackprops%cli.nbp == 0 {
-			if batchsize == 1 {
-				nn.CheckGradients(yvec)
-			} else if !ttp.sequential {
-				idxbase := i - batchsize + 1
-				nn.CheckGradients_Batch(Xs[idxbase:i+1], batchsize, ttp, idxbase)
-			}
+		if cli.checkgrad && nn.nbackprops%cli.nbp == 0 && (!ttp.sequential || batchsize == 1) {
+			idxbase := i - batchsize + 1
+			nn.CheckGradientsAfterBp(Xs[idxbase:i+1], ttp, idxbase)
 		}
 		nn.nnint.fixWeights(batchsize) // <============== (2)
 		ttp.weightdeltaAfter()
@@ -324,8 +311,8 @@ func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP, seqnum int) int {
 		}
 	}
 	cnv := ttp.converged()
-	if seqnum > 0 {
-		cost /= float64(seqnum)
+	if costnum > 0 {
+		cost /= float64(costnum)
 		if cli.tracecost {
 			log.Print(nn.nbackprops, fmt.Sprintf(" c %f", cost))
 		}
@@ -337,27 +324,28 @@ func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP, seqnum int) int {
 }
 
 func (nn *NeuNetwork) Train(Xs [][]float64, ttp *TTP) int {
-	converged, nbp, m, seqnum := 0, nn.nbackprops, len(Xs), 0
-	ttp.init(len(Xs))
+	converged, nbp, m, costnum := 0, nn.nbackprops, len(Xs), 0
+	ttp.init(m)
+	// case: sequential processing with possible inline tracing and/or grad-checking
 	if ttp.sequential {
-		// set 'seqnum' to trace cost and/or check cost convergence
-		if (ttp.maxcost > 0 || cli.tracecost) && (nn.nbackprops+m)/cli.nbp > nbp/cli.nbp {
-			seqnum = ttp.num
-			if seqnum == 0 {
-				seqnum = m * ttp.pct / 100
+		if (nn.nbackprops+m)/cli.nbp > nbp/cli.nbp {
+			// set 'costnum' to trace cost and/or check cost convergence
+			if ttp.maxcost > 0 || cli.tracecost {
+				costnum = ttp.num
+				if costnum == 0 {
+					costnum = m * ttp.pct / 100
+				}
 			}
 		}
-		return nn.TrainSet(Xs, ttp, seqnum)
-		//
-		// TODO: perform grad check inline with the last batch of the set
-		//
+		return nn.TrainSet(Xs, ttp, costnum)
 	}
+
+	// case: train, possibly multiple times while selecting random batches for cost/grad-checking
 	for k := 0; k < ttp.repeat && converged == 0; k++ {
-		converged = nn.TrainSet(Xs, ttp, seqnum)
+		converged = nn.TrainSet(Xs, ttp, 0)
 	}
-	// 1. test using a random subset of the training data
-	// 2. check convergence on cost
-	// 3. trace cost while testing
+	// test using a random subset of the already processed training data
+	// also, trace cost and check convergence (on cost)
 	return ttp.testRandomBatch(Xs, converged, nbp)
 }
 

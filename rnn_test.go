@@ -16,17 +16,26 @@ func Test_pcavg(t *testing.T) {
 	rnn.initXavier()
 	rnn.layers[1].config.actfname = "tanh"
 	// rnn.tunables.momentum = 0
-	ntrain, ntest := 2000, 8
-	Xs, Ys := newMatrix(ntrain+ntest, 1), newMatrix(ntrain+ntest, 1)
+	ntrain, ngrad, ntest := 2000, rnn.tunables.batchsize, 8
+	Xs, Ys := newMatrix(ntrain+ngrad+ntest, 1), newMatrix(ntrain+ngrad+ntest, 1)
 	Xs[0][0], Ys[0][0] = rand.Float64(), Xs[0][0]/2
 	for i := 1; i < len(Xs); i++ {
 		Xs[i][0] = rand.Float64()
 		Ys[i][0] = (Xs[i-1][0] + Xs[i][0]) / 2
 	}
 	converged := 0
-	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
+	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain+ngrad], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
 	for converged == 0 {
-		converged = rnn.Train(Xs[:ntrain], ttp)
+		if cli.checkgrad {
+			converged = rnn.Train(Xs[:ntrain], ttp)
+			l := rand.Int31n(int32(rnn.lastidx))
+			layer := rnn.layers[l]
+			next := layer.next
+			i, j := rand.Int31n(int32(layer.size)), rand.Int31n(int32(next.size))
+			rnn.Train_and_CheckGradients(Xs[ntrain:ntrain+ngrad], ttp, ntrain, int(l), int(i), int(j))
+		} else {
+			converged = rnn.Train(Xs[:ntrain+ngrad], ttp)
+		}
 	}
 	mse := 0.0
 	for i := 0; i < ntest; i++ {
