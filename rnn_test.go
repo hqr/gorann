@@ -26,7 +26,7 @@ func Test_pcavg(t *testing.T) {
 	converged := 0
 	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain+ngrad], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
 	for converged == 0 {
-		if cli.checkgrad {
+		if cli.checkgrad && ttp.sequential && rnn.tunables.batchsize > 1 {
 			converged = rnn.Train(Xs[:ntrain], ttp)
 			l := rand.Int31n(int32(rnn.lastidx))
 			layer := rnn.layers[l]
@@ -78,6 +78,42 @@ func Test_emavg(t *testing.T) {
 		avec := rnn.Predict(Xs[j])
 		mse += rnn.CostMse(Ys[j])
 		fmt.Printf("%.1f*%.2f + %.1f*%.2f -> %.2f : %.2f\n", alph, Xs[j][0], (1 - alph), Ys[j-1][0], avec[0], Ys[j][0])
+	}
+	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.nbackprops/1000)
+	if converged&ConvergedCost == 0 {
+		t.Errorf("failed to converge on cost (%d, %e)\n", converged, ttp.maxcost)
+	}
+}
+
+// f(X-prev, Y-prev, X-curr)
+func Test_unrolled(t *testing.T) {
+	rand.Seed(0)
+	input := NeuLayerConfig{size: 2}
+	hidden := NeuLayerConfig{"sigmoid", 8} // tanh
+	output := NeuLayerConfig{"sigmoid", 2}
+	rnn := NewUnrolledRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 10, gdalgscopeall: true})
+	rnn.layers[1].config.actfname = "tanh"
+	rnn.initXavier()
+
+	ntrain, ntest, alph := 8000, 8, 0.6
+	Xs, Ys := newMatrix(ntrain+ntest, 2), newMatrix(ntrain+ntest, 2)
+	Xs[0][0], Xs[0][1] = rand.Float64(), rand.Float64()
+	for i := 1; i < len(Xs); i++ {
+		Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
+		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[i-1][0]*(1-Xs[i-1][1])
+		Ys[i][1] = alph*(1-Ys[i-1][0])*Xs[i][1] + (1-alph)*Xs[i-1][0]
+	}
+	converged := 0
+	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
+	for converged == 0 {
+		converged = rnn.Train(Xs[:ntrain], ttp)
+	}
+	mse := 0.0
+	for i := 0; i < ntest; i++ {
+		j := ntrain + i
+		avec := rnn.Predict(Xs[j])
+		mse += rnn.CostMse(Ys[j])
+		fmt.Printf(" -> %4.2v : %4.2v\n", avec, Ys[j])
 	}
 	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.nbackprops/1000)
 	if converged&ConvergedCost == 0 {

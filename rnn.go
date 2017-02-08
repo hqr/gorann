@@ -86,3 +86,120 @@ func (rnn *NaiveRnn) fixWeights(batchsize int) {
 	rnn.NeuNetwork.fixWeights(batchsize)
 	rnn.layers[0].next = rnn.ht1.next
 }
+
+//===========================================================================
+//
+// network with "recurrent" layers backing up (historically) each
+// of the respective hidden layers
+//
+//===========================================================================
+type UnrolledRnn struct {
+	NeuNetwork
+	rhlayers []*NeuLayer
+}
+
+func NewUnrolledRnn(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, coutput NeuLayerConfig, tunables *NeuTunables) (rnn *UnrolledRnn) {
+	assert(numhidden > 0)
+	nn := NewNeuNetwork(cinput, chidden, numhidden, coutput, tunables)
+
+	rhlayers := make([]*NeuLayer, numhidden)
+	for l := 0; l < numhidden; l++ {
+		prevL := nn.layers[l]
+		ht1 := &NeuLayer{config: chidden, idx: l, size: chidden.size, prev: prevL.prev, next: prevL.next}
+		ht1.init(nn)
+		rhlayers[l] = ht1
+	}
+
+	rnn = &UnrolledRnn{NeuNetwork: *nn, rhlayers: rhlayers}
+	rnn.nnint = rnn
+	return
+}
+
+func (rnn *UnrolledRnn) forward(xvec []float64) []float64 {
+	var xnorm []float64 = xvec
+	if rnn.callbacks.normcbX != nil {
+		xnorm = cloneVector(xvec)
+		rnn.callbacks.normcbX(xnorm)
+	}
+	inputL := rnn.layers[0]
+	numhidden := len(rnn.rhlayers)
+	copy(inputL.avec, xnorm)
+	for l := 0; l < numhidden; l++ {
+		h := rnn.layers[l+1]
+		ht1 := rnn.rhlayers[l]
+		copy(ht1.avec, h.avec)
+	}
+
+	rnn.reForward()
+	outputL := rnn.layers[rnn.lastidx]
+	return outputL.avec
+}
+
+func (rnn *UnrolledRnn) reForward() {
+	numhidden := len(rnn.rhlayers)
+	for l := 0; l < numhidden; l++ {
+		currL := rnn.layers[l+1]
+		actF := activations[currL.config.actfname]
+		ht1 := rnn.rhlayers[l]
+		prevL := rnn.layers[l]
+
+		for i := 0; i < currL.config.size; i++ {
+			sumNewInput := mulColVec(prevL.weights, i, prevL.avec, prevL.size)
+			sumHistory := mulColVec(ht1.weights, i, ht1.avec, ht1.size)
+			currL.zvec[i] = sumNewInput + sumHistory
+			currL.avec[i] = actF.f(currL.zvec[i])
+		}
+	}
+	for l := numhidden + 1; l <= rnn.lastidx; l++ {
+		rnn.forwardLayer(rnn.layers[l])
+	}
+}
+
+func (rnn *UnrolledRnn) backpropDeltas(yvec []float64) {
+	rnn.NeuNetwork.backpropDeltas(yvec)
+}
+
+func (rnn *UnrolledRnn) backpropGradients() {
+	rnn.NeuNetwork.backpropGradients()
+
+	numhidden := len(rnn.rhlayers)
+	for l := 0; l < numhidden; l++ {
+		h := rnn.layers[l+1]
+		ht1 := rnn.rhlayers[l]
+		for i := 0; i < ht1.size; i++ {
+			for j := 0; j < h.size; j++ {
+				ht1.gradient[i][j] += ht1.avec[i] * h.deltas[j]
+			}
+		}
+	}
+}
+
+func (rnn *UnrolledRnn) fixGradients(batchsize int) {
+	rnn.unroll()
+	rnn.NeuNetwork.fixGradients(batchsize)
+	rnn.rollb()
+}
+
+func (rnn *UnrolledRnn) fixWeights(batchsize int) {
+	rnn.unroll()
+	rnn.NeuNetwork.fixWeights(batchsize)
+	rnn.rollb()
+}
+
+func (rnn *UnrolledRnn) unroll() {
+	numhidden := len(rnn.rhlayers)
+	for l := 0; l < numhidden; l++ {
+		prevL := rnn.layers[l]
+		ht1 := rnn.rhlayers[l]
+		prevL.next = ht1
+	}
+}
+
+func (rnn *UnrolledRnn) rollb() {
+	numhidden := len(rnn.rhlayers)
+	for l := 0; l < numhidden; l++ {
+		prevL := rnn.layers[l]
+		ht1 := rnn.rhlayers[l]
+		prevL.next = ht1.next
+	}
+}
