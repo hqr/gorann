@@ -10,22 +10,28 @@ import (
 func Test_pcavg(t *testing.T) {
 	rand.Seed(0)
 	input := NeuLayerConfig{size: 1}
-	hidden := NeuLayerConfig{"sigmoid", 4} // tanh
+	hidden := NeuLayerConfig{"sigmoid", 4}
 	output := NeuLayerConfig{"sigmoid", 1}
-	rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10, gdalgscopeall: true})
+	rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10}) //, gdalgscopeall: true})
 	rnn.initXavier()
 	rnn.layers[1].config.actfname = "tanh"
-	// rnn.tunables.momentum = 0
-	ntrain, ngrad, ntest := 2000, rnn.tunables.batchsize, 8
+	ntrain, ngrad, ntest := 1000, rnn.tunables.batchsize, 8
 	Xs, Ys := newMatrix(ntrain+ngrad+ntest, 1), newMatrix(ntrain+ngrad+ntest, 1)
-	Xs[0][0], Ys[0][0] = rand.Float64(), Xs[0][0]/2
-	for i := 1; i < len(Xs); i++ {
+	ffill := func(i, k int) {
 		Xs[i][0] = rand.Float64()
-		Ys[i][0] = (Xs[i-1][0] + Xs[i][0]) / 2
+		Ys[i][0] = (Xs[k][0] + Xs[i][0]) / 2
 	}
+
 	converged := 0
 	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain+ngrad], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
 	for converged == 0 {
+		for i := 0; i < ntrain+ngrad; i++ {
+			k := i - 1
+			if i == 0 { // wrap around
+				k = ntrain + ngrad - 1
+			}
+			ffill(i, k)
+		}
 		if cli.checkgrad && ttp.sequential && rnn.tunables.batchsize > 1 {
 			converged = rnn.Train(Xs[:ntrain], ttp)
 			l := rand.Int31n(int32(rnn.lastidx))
@@ -39,7 +45,10 @@ func Test_pcavg(t *testing.T) {
 	}
 	mse := 0.0
 	for i := 0; i < ntest; i++ {
-		j := ntrain + i
+		ffill(ntrain+ngrad+i, ntrain+ngrad+i-1)
+	}
+	for i := 0; i < ntest; i++ {
+		j := ntrain + ngrad + i
 		avec := rnn.Predict(Xs[j])
 		mse += rnn.CostMse(Ys[j])
 		fmt.Printf("(%.2f + %.2f)/2 -> %.2f : %.2f\n", Xs[j-1][0], Xs[j][0], avec[0], Ys[j][0])
@@ -60,19 +69,28 @@ func Test_emavg(t *testing.T) {
 	rnn.layers[1].config.actfname = "tanh"
 	rnn.initXavier()
 
-	ntrain, ntest, alph := 8000, 8, 0.6
+	ntrain, ntest, alph := 1000, 8, 0.6
 	Xs, Ys := newMatrix(ntrain+ntest, 1), newMatrix(ntrain+ntest, 1)
-	Xs[0][0] = rand.Float64()
-	for i := 1; i < len(Xs); i++ {
+	ffill := func(i, k int) {
 		Xs[i][0] = rand.Float64()
-		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[i-1][0]
+		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[k][0]
 	}
 	converged := 0
-	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
+	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 1E-5, sequential: true}
 	for converged == 0 {
+		for i := 0; i < ntrain; i++ {
+			k := i - 1
+			if i == 0 { // wrap around
+				k = ntrain - 1
+			}
+			ffill(i, k)
+		}
 		converged = rnn.Train(Xs[:ntrain], ttp)
 	}
 	mse := 0.0
+	for i := 0; i < ntest; i++ {
+		ffill(ntrain+i, ntrain+i-1)
+	}
 	for i := 0; i < ntest; i++ {
 		j := ntrain + i
 		avec := rnn.Predict(Xs[j])
@@ -95,25 +113,35 @@ func Test_unrolled(t *testing.T) {
 	rnn.layers[1].config.actfname = "tanh"
 	rnn.initXavier()
 
-	ntrain, ntest, alph := 8000, 8, 0.6
+	ntrain, ntest, alph := 1000, 8, 0.6
 	Xs, Ys := newMatrix(ntrain+ntest, 2), newMatrix(ntrain+ntest, 2)
-	Xs[0][0], Xs[0][1] = rand.Float64(), rand.Float64()
-	for i := 1; i < len(Xs); i++ {
+	ffill := func(i, k int) {
 		Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
-		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[i-1][0]*(1-Xs[i-1][1])
-		Ys[i][1] = alph*(1-Ys[i-1][0])*Xs[i][1] + (1-alph)*Xs[i-1][0]
+		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[k][0]*(1-Xs[k][1])
+		Ys[i][1] = alph*(1-Ys[k][0])*Xs[i][1] + (1-alph)*Xs[k][0]
 	}
+
 	converged := 0
 	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
 	for converged == 0 {
+		for i := 0; i < ntrain; i++ {
+			k := i - 1
+			if i == 0 { // wrap around
+				k = ntrain - 1
+			}
+			ffill(i, k)
+		}
 		converged = rnn.Train(Xs[:ntrain], ttp)
 	}
 	mse := 0.0
 	for i := 0; i < ntest; i++ {
+		ffill(ntrain+i, ntrain+i-1)
+	}
+	for i := 0; i < ntest; i++ {
 		j := ntrain + i
 		avec := rnn.Predict(Xs[j])
 		mse += rnn.CostMse(Ys[j])
-		fmt.Printf(" -> %4.2v : %4.2v\n", avec, Ys[j])
+		fmt.Printf(" -> %3.2v : %3.2v\n", avec, Ys[j])
 	}
 	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.nbackprops/1000)
 	if converged&ConvergedCost == 0 {
