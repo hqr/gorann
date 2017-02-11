@@ -1,7 +1,7 @@
 package gorann
 
 import (
-//	"log"
+	"fmt"
 )
 
 //===========================================================================
@@ -38,7 +38,7 @@ func (rnn *NaiveRnn) forward(xvec []float64) []float64 {
 	h1 := rnn.ht1.next
 	copy(rnn.ht1.avec, h1.avec)
 
-	rnn.reForward()
+	rnn.nnint.reForward()
 	outputL := rnn.layers[rnn.lastidx]
 	return outputL.avec
 }
@@ -57,10 +57,6 @@ func (rnn *NaiveRnn) reForward() {
 	for l := 2; l <= rnn.lastidx; l++ {
 		rnn.forwardLayer(rnn.layers[l])
 	}
-}
-
-func (rnn *NaiveRnn) backpropDeltas(yvec []float64) {
-	rnn.NeuNetwork.backpropDeltas(yvec)
 }
 
 func (rnn *NaiveRnn) backpropGradients() {
@@ -89,8 +85,8 @@ func (rnn *NaiveRnn) fixWeights(batchsize int) {
 
 //===========================================================================
 //
-// network with "recurrent" layers backing up (historically) each
-// of the respective hidden layers
+// fully connected network with "recurrent" layers backing up (historically)
+// each of the respective hidden layers
 //
 //===========================================================================
 type UnrolledRnn struct {
@@ -130,7 +126,7 @@ func (rnn *UnrolledRnn) forward(xvec []float64) []float64 {
 		copy(ht1.avec, h.avec)
 	}
 
-	rnn.reForward()
+	rnn.nnint.reForward()
 	outputL := rnn.layers[rnn.lastidx]
 	return outputL.avec
 }
@@ -201,5 +197,96 @@ func (rnn *UnrolledRnn) rollb() {
 		prevL := rnn.layers[l]
 		ht1 := rnn.rhlayers[l]
 		prevL.next = ht1.next
+	}
+}
+
+//===========================================================================
+//
+// modification of the UnrolledRnn (above)
+// where some of the synapses are blocked and dead forever,
+// and where only the specified number of historic synapses are carrying the weight,
+// so to speak
+//
+//===========================================================================
+type LimitedRnn struct {
+	UnrolledRnn
+	nalive int // num alive synapses
+}
+
+func NewLimitedRnn(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, coutput NeuLayerConfig, tunables *NeuTunables,
+	nalive int) (limrnn *LimitedRnn) {
+	rnn := NewUnrolledRnn(cinput, chidden, numhidden, coutput, tunables)
+	assert(nalive < chidden.size && nalive > 0, fmt.Sprintf("invalid nalive param: (%d, %d)", nalive, chidden.size))
+
+	limrnn = &LimitedRnn{UnrolledRnn: *rnn, nalive: nalive}
+	limrnn.nnint = limrnn
+	return
+}
+
+func (rnn *LimitedRnn) reForward() {
+	numhidden := len(rnn.rhlayers)
+	for l := 0; l < numhidden; l++ {
+		currL := rnn.layers[l+1]
+		actF := activations[currL.config.actfname]
+		ht1 := rnn.rhlayers[l]
+		prevL := rnn.layers[l]
+
+		for i := 0; i < currL.config.size; i++ {
+			sumNewInput := mulColVec(prevL.weights, i, prevL.avec, prevL.size)
+
+			sumHistory := 0.0
+			if rnn.nalive == 1 {
+				// this simulates the feed thru
+				// a single synapse connecting i-th neuron with its own counterpart at (t-1)
+				sumHistory = ht1.weights[i][i] * ht1.avec[i]
+			} else {
+				cnt := 0
+				for j := i; j < ht1.size && cnt < rnn.nalive; j++ {
+					sumHistory += ht1.weights[j][i] * ht1.avec[j]
+					cnt++
+				}
+				if cnt < rnn.nalive {
+					for j := i - 1; j >= 0 && cnt < rnn.nalive; j-- {
+						sumHistory += ht1.weights[j][i] * ht1.avec[j]
+						cnt++
+					}
+				}
+				assert(cnt == rnn.nalive)
+			}
+
+			currL.zvec[i] = sumNewInput + sumHistory
+			currL.avec[i] = actF.f(currL.zvec[i])
+		}
+	}
+	for l := numhidden + 1; l <= rnn.lastidx; l++ {
+		rnn.forwardLayer(rnn.layers[l])
+	}
+}
+
+func (rnn *LimitedRnn) backpropGradients() {
+	rnn.NeuNetwork.backpropGradients()
+
+	numhidden := len(rnn.rhlayers)
+	for l := 0; l < numhidden; l++ {
+		h := rnn.layers[l+1]
+		ht1 := rnn.rhlayers[l]
+		for i := 0; i < ht1.size; i++ {
+			if rnn.nalive == 1 {
+				ht1.gradient[i][i] += ht1.avec[i] * h.deltas[i]
+			} else {
+				cnt := 0
+				for j := i; j < h.size && cnt < rnn.nalive; j++ {
+					ht1.gradient[i][j] += ht1.avec[i] * h.deltas[j]
+					cnt++
+				}
+				if cnt < rnn.nalive {
+					for j := i - 1; j >= 0 && cnt < rnn.nalive; j-- {
+						ht1.gradient[i][j] += ht1.avec[i] * h.deltas[j]
+						cnt++
+					}
+				}
+				assert(cnt == rnn.nalive)
+			}
+		}
 	}
 }

@@ -2,6 +2,7 @@ package gorann
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"testing"
 )
@@ -17,9 +18,10 @@ func Test_pcavg(t *testing.T) {
 	rnn.layers[1].config.actfname = "tanh"
 	ntrain, ngrad, ntest := 1000, rnn.tunables.batchsize, 8
 	Xs, Ys := newMatrix(ntrain+ngrad+ntest, 1), newMatrix(ntrain+ngrad+ntest, 1)
-	ffill := func(i, k int) {
+	// simple historical dependency on the previous input
+	ffill := func(i, iprev int) {
 		Xs[i][0] = rand.Float64()
-		Ys[i][0] = (Xs[k][0] + Xs[i][0]) / 2
+		Ys[i][0] = (Xs[iprev][0] + Xs[i][0]) / 2
 	}
 
 	converged := 0
@@ -63,17 +65,19 @@ func Test_pcavg(t *testing.T) {
 func Test_emavg(t *testing.T) {
 	rand.Seed(0)
 	input := NeuLayerConfig{size: 1}
-	hidden := NeuLayerConfig{"sigmoid", 4} // tanh
+	hidden := NeuLayerConfig{"sigmoid", 4}
 	output := NeuLayerConfig{"sigmoid", 1}
-	rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 1, gdalgscopeall: true})
+	// rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 1, gdalgscopeall: true})
+	rnn := NewLimitedRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 1, gdalgscopeall: true}, 1)
 	rnn.layers[1].config.actfname = "tanh"
 	rnn.initXavier()
 
 	ntrain, ntest, alph := 1000, 8, 0.6
 	Xs, Ys := newMatrix(ntrain+ntest, 1), newMatrix(ntrain+ntest, 1)
-	ffill := func(i, k int) {
+	// simple historical dependency on the previous output (state)
+	ffill := func(i, iprev int) {
 		Xs[i][0] = rand.Float64()
-		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[k][0]
+		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[iprev][0]
 	}
 	converged := 0
 	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 1E-5, sequential: true}
@@ -103,22 +107,28 @@ func Test_emavg(t *testing.T) {
 	}
 }
 
-// f(X-prev, Y-prev, X-curr)
-func Test_unrolled(t *testing.T) {
+//
+// new-state = F-polynomial(prev-input, prev-state, curr-input)
+//
+func Test_histpoly(t *testing.T) {
 	rand.Seed(0)
 	input := NeuLayerConfig{size: 2}
-	hidden := NeuLayerConfig{"sigmoid", 8} // tanh
+	hidden := NeuLayerConfig{"tanh", 8}
 	output := NeuLayerConfig{"sigmoid", 2}
-	rnn := NewUnrolledRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 10, gdalgscopeall: true})
-	rnn.layers[1].config.actfname = "tanh"
+	// rnn := NewUnrolledRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 10, gdalgscopeall: true})
+	rnn := NewLimitedRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 10, gdalgscopeall: true}, 2)
 	rnn.initXavier()
 
 	ntrain, ntest, alph := 1000, 8, 0.6
 	Xs, Ys := newMatrix(ntrain+ntest, 2), newMatrix(ntrain+ntest, 2)
-	ffill := func(i, k int) {
+	//
+	// with non-linear dependency on both the previous vectored state and the previous input
+	// (is it obfuscated enough?)
+	//
+	ffill := func(i, iprev int) {
 		Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
-		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[k][0]*(1-Xs[k][1])
-		Ys[i][1] = alph*(1-Ys[k][0])*Xs[i][1] + (1-alph)*Xs[k][0]
+		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[iprev][0]*(1-Xs[iprev][1])
+		Ys[i][1] = alph*(1-Ys[iprev][1])*Xs[i][1] + (1-alph)*Xs[iprev][0]
 	}
 
 	converged := 0
@@ -126,7 +136,7 @@ func Test_unrolled(t *testing.T) {
 	for converged == 0 {
 		for i := 0; i < ntrain; i++ {
 			k := i - 1
-			if i == 0 { // wrap around
+			if i == 0 { // wrap around to maintain the sequence in order
 				k = ntrain - 1
 			}
 			ffill(i, k)
@@ -142,6 +152,60 @@ func Test_unrolled(t *testing.T) {
 		avec := rnn.Predict(Xs[j])
 		mse += rnn.CostMse(Ys[j])
 		fmt.Printf(" -> %3.2v : %3.2v\n", avec, Ys[j])
+	}
+	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.nbackprops/1000)
+	if converged&ConvergedCost == 0 {
+		t.Errorf("failed to converge on cost (%d, %e)\n", converged, ttp.maxcost)
+	}
+}
+
+//
+// new-state = F-non-polynomial-fairly-obfuscated(prev-input, prev-state, curr-input)
+//
+func Test_histsin(t *testing.T) {
+	rand.Seed(0)
+	input := NeuLayerConfig{size: 2}
+	hidden := NeuLayerConfig{"tanh", 16}
+	output := NeuLayerConfig{"sigmoid", 2}
+	// rnn := NewUnrolledRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 10, gdalgscopeall: true})
+	rnn := NewLimitedRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 10, gdalgscopeall: true}, 15)
+	rnn.initXavier()
+
+	ntrain, ntest, alph := 1000, 8, 0.6
+	Xs, Ys := newMatrix(ntrain+ntest, 2), newMatrix(ntrain+ntest, 2)
+	//
+	// the /next/ stateful output is:
+	// weighted sums of the current input and Sine/Cosine function of the product
+	// of the previous input and the previous state...
+	// and vise versa!
+	//
+	ffill := func(i, iprev int) {
+		Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
+		Ys[i][0] = alph*Xs[i][0] + (1-alph)*math.Sin(Ys[iprev][0]*(1-Xs[iprev][1]))
+		Ys[i][1] = alph*math.Cos((1-Ys[iprev][1])*Xs[i][1]) + (1-alph)*Xs[iprev][0]
+	}
+
+	converged := 0
+	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 2E-4, sequential: true}
+	for converged == 0 {
+		for i := 0; i < ntrain; i++ {
+			k := i - 1
+			if i == 0 { // wrap around to maintain the sequence in order
+				k = ntrain - 1
+			}
+			ffill(i, k)
+		}
+		converged = rnn.Train(Xs[:ntrain], ttp)
+	}
+	mse := 0.0
+	for i := 0; i < ntest; i++ {
+		ffill(ntrain+i, ntrain+i-1)
+	}
+	for i := 0; i < ntest; i++ {
+		j := ntrain + i
+		avec := rnn.Predict(Xs[j])
+		mse += rnn.CostMse(Ys[j])
+		fmt.Printf(" -> %3.3v : %3.3v\n", avec, Ys[j])
 	}
 	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.nbackprops/1000)
 	if converged&ConvergedCost == 0 {
