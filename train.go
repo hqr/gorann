@@ -177,7 +177,7 @@ func (ttp *TTP) testRandomBatch(Xs [][]float64, cnv int, nbp int) int {
 //===========================================================================
 func (nn *NeuNetwork) Predict(xvec []float64) []float64 {
 	yvec := nn.nnint.forward(xvec)
-	var ynorm []float64 = yvec
+	var ynorm = yvec
 	if nn.callbacks.denormcbY != nil {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.denormcbY(ynorm)
@@ -274,7 +274,7 @@ func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
 	assert(nn.coutput.size == len(yvec), fmt.Sprintf("num outputs: %d (must be %d)", len(yvec), nn.coutput.size))
 
 	nn.nnint.forward(xvec)
-	var ynorm []float64 = yvec
+	var ynorm = yvec
 	if nn.callbacks.normcbY != nil {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.normcbY(ynorm)

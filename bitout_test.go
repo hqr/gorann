@@ -15,7 +15,7 @@ func Test_bitoutput(t *testing.T) {
 	nn.initXavier()
 
 	xor8bits := func(xvec []float64) []float64 {
-		var y []float64 = make([]float64, 8)
+		var y = make([]float64, 8)
 		for i := 0; i < 8; i++ {
 			y[i] = float64(int(xvec[i]) ^ int(xvec[8+i]))
 		}
@@ -72,7 +72,7 @@ func Test_classify(t *testing.T) {
 	nn.callbacks = NeuCallbacks{normalize, nil, nil}
 
 	xorclassify := func(xvec []float64) []float64 {
-		var y []float64 = make([]float64, nclasses)
+		var y = make([]float64, nclasses)
 		i := (int(xvec[0]) ^ int(xvec[1])) % nclasses
 		y[nclasses-i-1] = 1
 		return y

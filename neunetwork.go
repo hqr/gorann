@@ -249,7 +249,7 @@ func (nn *NeuNetwork) initXavier() {
 
 func (nn *NeuNetwork) forward(xvec []float64) []float64 {
 	assert(len(xvec) == nn.cinput.size)
-	var xnorm []float64 = xvec
+	var xnorm = xvec
 	if nn.callbacks.normcbX != nil {
 		xnorm = cloneVector(xvec)
 		nn.callbacks.normcbX(xnorm)

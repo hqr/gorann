@@ -19,7 +19,7 @@ func (nn *NeuNetwork) costfunction(yvec []float64) (cost float64) {
 //
 func (nn *NeuNetwork) CostMse(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
-	var ynorm []float64 = yvec
+	var ynorm = yvec
 	if nn.callbacks.normcbY != nil {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.normcbY(ynorm)
@@ -54,7 +54,7 @@ func (nn *NeuNetwork) costl2regeps(l int, i int, j int, eps float64) float64 {
 
 func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
-	var ynorm []float64 = yvec
+	var ynorm = yvec
 	if nn.callbacks.normcbY != nil {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.normcbY(ynorm)
@@ -84,7 +84,7 @@ func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {
 func (nn *NeuNetwork) AbsError(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
 	outputL := nn.layers[nn.lastidx]
-	var ydenorm []float64 = outputL.avec
+	var ydenorm = outputL.avec
 	if nn.callbacks.denormcbY != nil {
 		ydenorm = cloneVector(outputL.avec)
 		nn.callbacks.denormcbY(ydenorm)

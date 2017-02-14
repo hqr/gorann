@@ -108,11 +108,14 @@ func init() {
 	flag.Float64Var(&cli.momentum, "momentum", 0, "controls the second part in next-update formula: current-change + momentum * previous-update")
 	flag.Float64Var(&cli.lambda, "lambda", 0, "controls regularization term in the cost function")
 	flag.StringVar(&cli.gdalgname, "gdalgname", "", "optimization algorithm: [ Adagrad | Adadelta | RMSprop | ADAM | Rprop ]")
-	flag.IntVar(&cli.batchsize, "batchsize", 0, "as in: mini-batch gradient descent")
+	flag.IntVar(&cli.batchsize, "batchsize", 0, "as in \"mini-batch gradient descent\"")
 
 	flag.IntVar(&cli.nbp, "nbp", 100000, "trace interval: the number of back propagations (default 100000)")
 	flag.BoolVar(&cli.checkgrad, "checkgrad", false, "check gradients every \"trace interval\"")
 	flag.BoolVar(&cli.tracecost, "tracecost", false, "trace cost every \"trace interval\"")
 
 	flag.Parse()
+}
+
+func Configure() {
 }

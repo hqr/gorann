@@ -28,7 +28,7 @@ func NewNaiveRnn(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, c
 }
 
 func (rnn *NaiveRnn) forward(xvec []float64) []float64 {
-	var xnorm []float64 = xvec
+	var xnorm = xvec
 	if rnn.callbacks.normcbX != nil {
 		xnorm = cloneVector(xvec)
 		rnn.callbacks.normcbX(xnorm)
@@ -112,7 +112,7 @@ func NewUnrolledRnn(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int
 }
 
 func (rnn *UnrolledRnn) forward(xvec []float64) []float64 {
-	var xnorm []float64 = xvec
+	var xnorm = xvec
 	if rnn.callbacks.normcbX != nil {
 		xnorm = cloneVector(xvec)
 		rnn.callbacks.normcbX(xnorm)

@@ -193,7 +193,7 @@ func copyVector(dst []float64, src []float64) {
 }
 
 func cloneVector(src []float64) []float64 {
-	var dst []float64 = make([]float64, len(src))
+	var dst = make([]float64, len(src))
 	copy(dst, src)
 	return dst
 }

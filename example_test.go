@@ -25,7 +25,7 @@ func ExampleF_xorbits() {
 	nn.callbacks = NeuCallbacks{normalize, normalize, denormalize}
 
 	xorbits := func(xvec []float64) []float64 {
-		var y []float64 = []float64{0}
+		var y = []float64{0}
 		a := int(xvec[0])
 		b := int(xvec[1])
 		y[0] = float64(a ^ b)
@@ -70,7 +70,7 @@ func ExampleF_1() {
 	nn := NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, alpha: 0.4, costfname: CostCrossEntropy})
 
 	xorbits := func(xvec []float64) []float64 {
-		var y []float64 = []float64{0}
+		var y = []float64{0}
 		a := int(xvec[0])
 		b := int(xvec[1])
 		y[0] = float64(a ^ b)
@@ -112,7 +112,7 @@ func ExampleF_sumsquares() {
 	nn := NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: Rprop})
 
 	sumsquares := func(xvec []float64) []float64 {
-		var y []float64 = []float64{0}
+		var y = []float64{0}
 		for i := 0; i < len(xvec); i++ {
 			y[0] += xvec[i] * xvec[i]
 		}
@@ -131,7 +131,7 @@ func ExampleF_sumsquares() {
 	// use to estimate
 	var loss float64
 	for i := 0; i < 4; i++ {
-		var xvec []float64 = []float64{0, 0}
+		var xvec = []float64{0, 0}
 		xvec[0] = rand.Float64() / 1.5
 		xvec[1] = rand.Float64() / 1.5
 		y1 := nn.Predict(xvec)
@@ -164,7 +164,7 @@ func ExampleF_sumlogarithms() {
 	nn.callbacks = NeuCallbacks{nil, normalize, denormalize}
 
 	sumlogarithms := func(xvec []float64) []float64 {
-		var y []float64 = []float64{0}
+		var y = []float64{0}
 		for i := 0; i < len(xvec); i++ {
 			y[0] += math.Log(xvec[i])
 		}
@@ -184,7 +184,7 @@ func ExampleF_sumlogarithms() {
 	}
 	var mse float64
 	for i := 0; i < 4; i++ {
-		var xvec []float64 = []float64{0, 0}
+		var xvec = []float64{0, 0}
 		xvec[0] = rand.Float64()
 		xvec[1] = rand.Float64()
 		y2 := sumlogarithms(xvec)
