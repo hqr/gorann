@@ -24,3 +24,5 @@ go get github.com/hqr/gorann
 
 See [Makefile](https://github.com/hqr/gorann/blob/master/Makefile) for test, lint, command-line help, and other useful targets.
 
+[license-url]: https://github.com/hqr/gorann/blob/master/LICENSE
+[license-svg]: https://img.shields.io/badge/license-MIT-blue.svg
