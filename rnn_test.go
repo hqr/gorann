@@ -162,17 +162,25 @@ func Test_histpoly(t *testing.T) {
 //
 // new-state = F-non-polynomial-fairly-obfuscated(prev-input, prev-state, curr-input)
 //
-func Test_sinecosine(t *testing.T) {
+func Test_sinecosh(t *testing.T) {
 	rand.Seed(0)
 	input := NeuLayerConfig{size: 2}
 	hidden := NeuLayerConfig{"tanh", 16}
 	output := NeuLayerConfig{"sigmoid", 2}
-	// rnn := NewNaiveRnn(input, hidden, 4, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
-	rnn := NewUnrolledRnn(input, hidden, 4, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
-	// rnn := NewLimitedRnn(input, hidden, 4, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true}, 13)
-	rnn.initXavier()
+	var nn *NeuNetwork
+	if cli.lessrnn == 0 {
+		rnn := NewUnrolledRnn(input, hidden, 4, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
+		nn = &rnn.NeuNetwork
+	} else if cli.lessrnn >= hidden.size {
+		rnn := NewNaiveRnn(input, hidden, 4, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
+		nn = &rnn.NeuNetwork
+	} else {
+		rnn := NewLimitedRnn(input, hidden, 4, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true}, hidden.size-cli.lessrnn)
+		nn = &rnn.NeuNetwork
+	}
+	nn.initXavier()
 
-	ntrain, ntest, alph := 1000, 8, 0.6
+	ntrain, ntest, alpha := 1000, 8, 0.3
 	Xs, Ys := newMatrix(ntrain+ntest, 2), newMatrix(ntrain+ntest, 2)
 	//
 	// the /next/ stateful output is:
@@ -182,12 +190,12 @@ func Test_sinecosine(t *testing.T) {
 	//
 	ffill := func(i, iprev int) {
 		Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
-		Ys[i][0] = (1-alph)*Xs[i][1] + alph*math.Cos(Ys[iprev][0]*(1-Xs[iprev][0]))
-		Ys[i][1] = (1-alph)*Xs[i][0] + alph*math.Sin((1-Ys[iprev][1])*Xs[iprev][1])
+		Ys[i][0] = (1-alpha)*Xs[i][1] + alpha*math.Cosh(Ys[iprev][0]*(1-Xs[iprev][0]))
+		Ys[i][1] = (1-alpha)*Xs[i][0] + alpha*math.Sin((1-Ys[iprev][1])*Xs[iprev][1])
 	}
 
 	converged := 0
-	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E6, maxcost: 1E-4, sequential: true}
+	ttp := &TTP{nn: nn, resultset: Ys[:ntrain], maxbackprops: 2E6, maxcost: 1E-4, sequential: true}
 	for converged == 0 {
 		for i := 0; i < ntrain; i++ {
 			k := i - 1
@@ -196,7 +204,7 @@ func Test_sinecosine(t *testing.T) {
 			}
 			ffill(i, k)
 		}
-		converged = rnn.Train(Xs[:ntrain], ttp)
+		converged = nn.Train(Xs[:ntrain], ttp)
 	}
 	mse := 0.0
 	for i := 0; i < ntest; i++ {
@@ -204,9 +212,9 @@ func Test_sinecosine(t *testing.T) {
 	}
 	for i := 0; i < ntest; i++ {
 		j := ntrain + i
-		avec := rnn.Predict(Xs[j])
-		mse += rnn.CostMse(Ys[j])
+		avec := nn.Predict(Xs[j])
+		mse += nn.CostMse(Ys[j])
 		fmt.Printf(" -> %3.3v : %3.3v\n", avec, Ys[j])
 	}
-	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.nbackprops/1000)
+	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, nn.nbackprops/1000)
 }

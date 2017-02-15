@@ -99,6 +99,8 @@ type CommandLine struct {
 	nbp       int
 	tracecost bool
 	checkgrad bool
+	// FIXME, remove
+	lessrnn int
 }
 
 var cli = CommandLine{}
@@ -113,6 +115,8 @@ func init() {
 	flag.IntVar(&cli.nbp, "nbp", 100000, "trace interval: the number of back propagations (default 100000)")
 	flag.BoolVar(&cli.checkgrad, "checkgrad", false, "check gradients every \"trace interval\"")
 	flag.BoolVar(&cli.tracecost, "tracecost", false, "trace cost every \"trace interval\"")
+
+	flag.IntVar(&cli.lessrnn, "lessrnn", 0, "... lesser RNN ...")
 
 	flag.Parse()
 }
