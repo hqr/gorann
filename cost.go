@@ -24,8 +24,8 @@ func (nn *NeuNetwork) CostMse(yvec []float64) float64 {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.normcbY(ynorm)
 	}
-	outputL := nn.layers[nn.lastidx]
-	return normL2VectorSquared(ynorm, outputL.avec) / 2
+	olayer := nn.layers[nn.lastidx]
+	return normL2VectorSquared(ynorm, olayer.avec) / 2
 }
 
 // the "L2 regularization" part of the cost
@@ -59,8 +59,8 @@ func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.normcbY(ynorm)
 	}
-	outputL := nn.layers[nn.lastidx]
-	aname, avec, zvec := outputL.config.actfname, outputL.avec, outputL.zvec
+	olayer := nn.layers[nn.lastidx]
+	aname, avec, zvec := olayer.config.actfname, olayer.avec, olayer.zvec
 	var err float64
 
 	// special case: binary classification
@@ -83,10 +83,10 @@ func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {
 // note also that it returns L1 norm
 func (nn *NeuNetwork) AbsError(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
-	outputL := nn.layers[nn.lastidx]
-	var ydenorm = outputL.avec
+	olayer := nn.layers[nn.lastidx]
+	var ydenorm = olayer.avec
 	if nn.callbacks.denormcbY != nil {
-		ydenorm = cloneVector(outputL.avec)
+		ydenorm = cloneVector(olayer.avec)
 		nn.callbacks.denormcbY(ydenorm)
 	}
 	return normL1Vector(ydenorm, yvec)

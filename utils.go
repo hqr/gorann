@@ -80,7 +80,7 @@ func mulRowVec(mat [][]float64, r int, vec []float64, count int) float64 {
 	return sum
 }
 
-/* - works; commented out for now
+/*
 func ppMatrix(name string, mat [][]float64) {
 	rows := len(mat)
 	cols := len(mat[0])
@@ -95,10 +95,10 @@ func ppMatrix(name string, mat [][]float64) {
 }
 */
 
-func divElemMatrix(mat [][]float64, d float64) {
+func divMatrixNum(mat [][]float64, d float64) {
 	for r := 0; r < len(mat); r++ {
 		row := mat[r]
-		divElemVector(row, d)
+		divVectorNum(row, d)
 	}
 }
 
@@ -145,15 +145,52 @@ func normL1Vector(avec []float64, bvec []float64) float64 {
 	return l1norm
 }
 
-func divElemVector(vec []float64, d float64) {
+// divide vector by a number
+func divVectorNum(vec []float64, d float64) {
 	for c := 0; c < len(vec); c++ {
 		vec[c] /= d
 	}
 }
 
-func mulElemVector(vec []float64, d float64) {
+// element-wise division: dst /= src
+func divVectorElem(dst []float64, src []float64) {
+	for c := 0; c < len(dst); c++ {
+		dst[c] /= src[c]
+	}
+}
+
+// element-wise division absolute: dst = math.Abs(dst/src)
+func divVectorElemAbs(dst []float64, src []float64) {
+	for c := 0; c < len(dst); c++ {
+		dst[c] = math.Abs(dst[c]) / math.Abs(src[c])
+	}
+}
+
+// multiply vector by a number
+func mulVectorNum(vec []float64, d float64) {
 	for c := 0; c < len(vec); c++ {
 		vec[c] *= d
+	}
+}
+
+// element-wise product: dst *= src
+func mulVectorElem(dst []float64, src []float64) {
+	for c := 0; c < len(dst); c++ {
+		dst[c] *= src[c]
+	}
+}
+
+// element-wise add: dst += src
+func addVectorElem(dst []float64, src []float64) {
+	for c := 0; c < len(dst); c++ {
+		dst[c] += src[c]
+	}
+}
+
+// element-wise add absolute values: dst += math.Abs(src)
+func addVectorElemAbs(dst []float64, src []float64) {
+	for c := 0; c < len(dst); c++ {
+		dst[c] += math.Abs(src[c])
 	}
 }
 

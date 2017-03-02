@@ -10,11 +10,19 @@ import (
 //
 type NeuNetworkInterface interface {
 	forward(xvec []float64) []float64
-	reForward()
-	backpropDeltas(yvec []float64)
+	reForward() []float64
+	computeDeltas(yvec []float64) []float64
+	backpropDeltas()
 	backpropGradients()
 	fixGradients(batchsize int)
 	fixWeights(batchsize int)
+	// aux
+	populateInput(xvec []float64, normalize bool)
+	populateDeltas(deltas []float64)
+	// Get accessors
+	getCinput() *NeuLayerConfig
+	getCoutput() *NeuLayerConfig
+	getTunables() *NeuTunables
 }
 
 //
@@ -40,10 +48,11 @@ type NeuLayer struct {
 	prev      *NeuLayer
 	next      *NeuLayer
 	nn        *NeuNetwork
-	// runtime
-	avec        []float64
-	zvec        []float64
-	deltas      []float64
+	// runtime - vectors
+	avec   []float64
+	zvec   []float64
+	deltas []float64
+	// runtime - weights, gradients, and 2nd order
 	weights     [][]float64
 	gradient    [][]float64
 	pregradient [][]float64 // previous value of the gradient, applied with momentum
@@ -77,7 +86,7 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 		nn.layers[idx] = layer
 		prev = layer
 	}
-	// set  defaults (unless already defined)
+	// set defaults (unless already defined)
 	nn.initunables()
 	// algorithm-specific hyper-params
 	nn.initgdalg()
@@ -86,9 +95,7 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 		layer := nn.layers[idx]
 		layer.init(nn)
 	}
-	//
-	// other useful settings
-	//
+	// other useful tunables
 	// nn.tunables.gdalgscopeall = true
 	// nn.tunables.costfname = CostCrossEntropy
 	// nn.tunables.lambda = DEFAULT_lambda
@@ -247,27 +254,29 @@ func (nn *NeuNetwork) initXavier() {
 	}
 }
 
-func (nn *NeuNetwork) forward(xvec []float64) []float64 {
+func (nn *NeuNetwork) populateInput(xvec []float64, normalize bool) {
 	assert(len(xvec) == nn.cinput.size)
 	var xnorm = xvec
-	if nn.callbacks.normcbX != nil {
+	if normalize && nn.callbacks.normcbX != nil {
 		xnorm = cloneVector(xvec)
 		nn.callbacks.normcbX(xnorm)
 	}
-	inputL := nn.layers[0]
-	copy(inputL.avec, xnorm) // copies up to the smaller num elems, bias remains intact
-	for l := 1; l <= nn.lastidx; l++ {
-		nn.forwardLayer(nn.layers[l])
-	}
-	outputL := nn.layers[nn.lastidx]
-	return outputL.avec
+	ilayer := nn.layers[0]
+	copy(ilayer.avec, xnorm) // copies up to the smaller num elems, bias remains intact
 }
 
-// feed-forward pass on the *already stored* input, possibly with different weights
-func (nn *NeuNetwork) reForward() {
+func (nn *NeuNetwork) forward(xvec []float64) []float64 {
+	nn.populateInput(xvec, true)
+	return nn.reForward()
+}
+
+// feed-forward pass on the already stored input, possibly with different weights
+func (nn *NeuNetwork) reForward() []float64 {
 	for l := 1; l <= nn.lastidx; l++ {
 		nn.forwardLayer(nn.layers[l])
 	}
+	olayer := nn.layers[nn.lastidx]
+	return olayer.avec
 }
 
 func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
@@ -292,43 +301,55 @@ func (nn *NeuNetwork) forwardLayer(layer *NeuLayer) {
 	}
 }
 
-func (nn *NeuNetwork) backpropDeltas(yvec []float64) {
+//
+// compute output layer's deltas based on its activation and
+// the configured NN's cost function
+// NOTE:
+// only the most popular (cost, activation) combos are currently supported
+//
+func (nn *NeuNetwork) computeDeltas(yvec []float64) []float64 {
 	assert(len(yvec) == nn.coutput.size)
-	outputL := nn.layers[nn.lastidx]
-	cname, aname := nn.tunables.costfname, outputL.config.actfname
-	assert(cname == CostMse || cname == CostCrossEntropy, "NIY: delta rule for the spec-ed cost function")
+	olayer := nn.layers[nn.lastidx]
+	cname, aname := nn.tunables.costfname, olayer.config.actfname
+	assert(cname == CostMse || cname == CostCrossEntropy, "Unexpected cost function")
 
-	nn.nbackprops++
-	//
-	// delta rules
-	//
 	actF := activations[aname]
 	if cname == CostCrossEntropy && (aname == "sigmoid" || aname == "softmax") {
 		for i := 0; i < nn.coutput.size; i++ {
-			outputL.deltas[i] = outputL.avec[i] - yvec[i]
+			olayer.deltas[i] = olayer.avec[i] - yvec[i]
 		}
 	} else {
 		for i := 0; i < nn.coutput.size; i++ {
 			if cname == CostCrossEntropy {
 				if nn.coutput.size == 1 {
-					outputL.deltas[i] = (outputL.avec[i] - yvec[i]) / (outputL.avec[i] * (1 - outputL.avec[i]))
+					olayer.deltas[i] = (olayer.avec[i] - yvec[i]) / (olayer.avec[i] * (1 - olayer.avec[i]))
 				} else {
-					outputL.deltas[i] = -yvec[i] / outputL.avec[i]
+					olayer.deltas[i] = -yvec[i] / olayer.avec[i]
 				}
 			} else {
-				outputL.deltas[i] = outputL.avec[i] - yvec[i]
+				olayer.deltas[i] = olayer.avec[i] - yvec[i]
 			}
 			if actF.dfy != nil {
-				outputL.deltas[i] *= actF.dfy(outputL.avec[i])
+				olayer.deltas[i] *= actF.dfy(olayer.avec[i])
 			} else {
-				outputL.deltas[i] *= actF.dfx(outputL.zvec[i])
+				olayer.deltas[i] *= actF.dfx(olayer.zvec[i])
 			}
 		}
 	}
+	return olayer.deltas
+}
+
+func (nn *NeuNetwork) populateDeltas(deltas []float64) {
+	olayer := nn.layers[nn.lastidx]
+	copyVector(olayer.deltas, deltas)
+}
+
+func (nn *NeuNetwork) backpropDeltas() {
+	nn.nbackprops++
 	for l := nn.lastidx - 1; l > 0; l-- {
 		layer := nn.layers[l]
 		next := layer.next
-		actF = activations[layer.config.actfname]
+		actF := activations[layer.config.actfname]
 		for i := 0; i < layer.size; i++ {
 			sum := mulRowVec(layer.weights, i, next.deltas, next.size)
 			if actF.dfy != nil {
@@ -341,7 +362,8 @@ func (nn *NeuNetwork) backpropDeltas(yvec []float64) {
 }
 
 //
-// use the deltas (above) to recompute weight gradients
+// recompute weight gradients
+// typical sequence: computeDeltas() -- backpropDeltas() -- backpropGradients()
 //
 func (nn *NeuNetwork) backpropGradients() {
 	for layer := nn.layers[0]; layer.next != nil; layer = layer.next {
@@ -360,7 +382,7 @@ func (nn *NeuNetwork) backpropGradients() {
 func (nn *NeuNetwork) fixGradients(batchsize int) {
 	if batchsize > 1 {
 		for layer := nn.layers[0]; layer.next != nil; layer = layer.next {
-			divElemMatrix(layer.gradient, float64(batchsize))
+			divMatrixNum(layer.gradient, float64(batchsize))
 		}
 	}
 }
@@ -406,6 +428,24 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 	}
 }
 
+//
+// Get accessors
+//
+func (nn *NeuNetwork) getCinput() *NeuLayerConfig {
+	return &nn.cinput
+}
+
+func (nn *NeuNetwork) getCoutput() *NeuLayerConfig {
+	return &nn.coutput
+}
+
+func (nn *NeuNetwork) getTunables() *NeuTunables {
+	return nn.tunables
+}
+
+//
+// NeuLayer methods
+//
 func (layer *NeuLayer) weightij(i int, j int) float64 {
 	nn := layer.nn
 	alpha := nn.tunables.alpha

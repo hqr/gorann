@@ -279,7 +279,8 @@ func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
 		ynorm = cloneVector(yvec)
 		nn.callbacks.normcbY(ynorm)
 	}
-	nn.nnint.backpropDeltas(ynorm)
+	nn.nnint.computeDeltas(ynorm)
+	nn.nnint.backpropDeltas()
 	nn.nnint.backpropGradients()
 }
 
@@ -350,8 +351,8 @@ func (nn *NeuNetwork) Train(Xs [][]float64, ttp *TTP) int {
 }
 
 func (nn *NeuNetwork) Pretrain(Xs [][]float64, ttp *TTP) {
-	nn_orig := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables)
-	nn_optm := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, nn.tunables)
+	nn_orig := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, new(NeuTunables))
+	nn_optm := NewNeuNetwork(nn.cinput, nn.chidden, nn.lastidx-1, nn.coutput, new(NeuTunables))
 	nn_orig.copyNetwork(nn)
 	nn_optm.copyNetwork(nn)
 

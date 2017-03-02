@@ -17,10 +17,10 @@ func ExampleF_xorbits() {
 
 	maxint := int32(0xff)
 	normalize := func(vec []float64) {
-		divElemVector(vec, float64(maxint))
+		divVectorNum(vec, float64(maxint))
 	}
 	denormalize := func(vec []float64) {
-		mulElemVector(vec, float64(maxint))
+		mulVectorNum(vec, float64(maxint))
 	}
 	nn.callbacks = NeuCallbacks{normalize, normalize, denormalize}
 
@@ -156,10 +156,10 @@ func ExampleF_sumlogarithms() {
 	nn := NewNeuNetwork(input, hidden, 5, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10})
 
 	normalize := func(vec []float64) {
-		divElemVector(vec, float64(-8))
+		divVectorNum(vec, float64(-8))
 	}
 	denormalize := func(vec []float64) {
-		mulElemVector(vec, float64(-8))
+		mulVectorNum(vec, float64(-8))
 	}
 	nn.callbacks = NeuCallbacks{nil, normalize, denormalize}
 

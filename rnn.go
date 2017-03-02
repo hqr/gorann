@@ -18,8 +18,8 @@ type NaiveRnn struct {
 func NewNaiveRnn(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, coutput NeuLayerConfig, tunables *NeuTunables) (rnn *NaiveRnn) {
 	assert(numhidden > 0)
 	nn := NewNeuNetwork(cinput, chidden, numhidden, coutput, tunables)
-	inputL := nn.layers[0]
-	ht1 := &NeuLayer{config: chidden, idx: inputL.idx, size: chidden.size, prev: inputL.prev, next: inputL.next}
+	ilayer := nn.layers[0]
+	ht1 := &NeuLayer{config: chidden, idx: ilayer.idx, size: chidden.size, prev: ilayer.prev, next: ilayer.next}
 	ht1.init(nn)
 
 	rnn = &NaiveRnn{NeuNetwork: *nn, ht1: ht1}
@@ -33,22 +33,20 @@ func (rnn *NaiveRnn) forward(xvec []float64) []float64 {
 		xnorm = cloneVector(xvec)
 		rnn.callbacks.normcbX(xnorm)
 	}
-	inputL := rnn.layers[0]
-	copy(inputL.avec, xnorm)
+	ilayer := rnn.layers[0]
+	copy(ilayer.avec, xnorm)
 	h1 := rnn.ht1.next
 	copy(rnn.ht1.avec, h1.avec)
 
-	rnn.nnint.reForward()
-	outputL := rnn.layers[rnn.lastidx]
-	return outputL.avec
+	return rnn.nnint.reForward()
 }
 
-func (rnn *NaiveRnn) reForward() {
+func (rnn *NaiveRnn) reForward() []float64 {
 	h1 := rnn.ht1.next
-	inputL := rnn.layers[0]
+	ilayer := rnn.layers[0]
 	actF := activations[h1.config.actfname]
 	for i := 0; i < h1.config.size; i++ {
-		sumNewInput := mulColVec(inputL.weights, i, inputL.avec, inputL.size)
+		sumNewInput := mulColVec(ilayer.weights, i, ilayer.avec, ilayer.size)
 		sumHistory := mulColVec(rnn.ht1.weights, i, rnn.ht1.avec, rnn.ht1.size)
 		h1.zvec[i] = sumNewInput + sumHistory
 		h1.avec[i] = actF.f(h1.zvec[i]) // recursive activation on the history part as well
@@ -57,6 +55,8 @@ func (rnn *NaiveRnn) reForward() {
 	for l := 2; l <= rnn.lastidx; l++ {
 		rnn.forwardLayer(rnn.layers[l])
 	}
+	olayer := rnn.layers[rnn.lastidx]
+	return olayer.avec
 }
 
 func (rnn *NaiveRnn) backpropGradients() {
@@ -117,21 +117,19 @@ func (rnn *UnrolledRnn) forward(xvec []float64) []float64 {
 		xnorm = cloneVector(xvec)
 		rnn.callbacks.normcbX(xnorm)
 	}
-	inputL := rnn.layers[0]
+	ilayer := rnn.layers[0]
 	numhidden := len(rnn.rhlayers)
-	copy(inputL.avec, xnorm)
+	copy(ilayer.avec, xnorm)
 	for l := 0; l < numhidden; l++ {
 		h := rnn.layers[l+1]
 		ht1 := rnn.rhlayers[l]
 		copy(ht1.avec, h.avec)
 	}
 
-	rnn.nnint.reForward()
-	outputL := rnn.layers[rnn.lastidx]
-	return outputL.avec
+	return rnn.nnint.reForward()
 }
 
-func (rnn *UnrolledRnn) reForward() {
+func (rnn *UnrolledRnn) reForward() []float64 {
 	numhidden := len(rnn.rhlayers)
 	for l := 0; l < numhidden; l++ {
 		currL := rnn.layers[l+1]
@@ -149,10 +147,8 @@ func (rnn *UnrolledRnn) reForward() {
 	for l := numhidden + 1; l <= rnn.lastidx; l++ {
 		rnn.forwardLayer(rnn.layers[l])
 	}
-}
-
-func (rnn *UnrolledRnn) backpropDeltas(yvec []float64) {
-	rnn.NeuNetwork.backpropDeltas(yvec)
+	olayer := rnn.layers[rnn.lastidx]
+	return olayer.avec
 }
 
 func (rnn *UnrolledRnn) backpropGradients() {
@@ -223,7 +219,7 @@ func NewLimitedRnn(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 	return
 }
 
-func (rnn *LimitedRnn) reForward() {
+func (rnn *LimitedRnn) reForward() []float64 {
 	numhidden := len(rnn.rhlayers)
 	for l := 0; l < numhidden; l++ {
 		currL := rnn.layers[l+1]
@@ -261,6 +257,8 @@ func (rnn *LimitedRnn) reForward() {
 	for l := numhidden + 1; l <= rnn.lastidx; l++ {
 		rnn.forwardLayer(rnn.layers[l])
 	}
+	olayer := rnn.layers[rnn.lastidx]
+	return olayer.avec
 }
 
 func (rnn *LimitedRnn) backpropGradients() {

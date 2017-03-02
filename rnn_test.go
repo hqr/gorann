@@ -159,54 +159,91 @@ func Test_histpoly(t *testing.T) {
 	}
 }
 
+//===================================================================================
 //
 // new-state = F-non-polynomial-fairly-obfuscated(prev-input, prev-state, curr-input)
 //
-func Test_sinecosine(t *testing.T) {
-	rand.Seed(0)
-	input := NeuLayerConfig{size: 2}
-	hidden := NeuLayerConfig{"tanh", 16}
-	output := NeuLayerConfig{"sigmoid", 2}
-	// rnn := NewNaiveRnn(input, hidden, 4, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
-	rnn := NewUnrolledRnn(input, hidden, 4, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
-	// rnn := NewLimitedRnn(input, hidden, 4, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true}, 13)
-	rnn.initXavier()
-
-	ntrain, ntest, alph := 1000, 8, 0.6
-	Xs, Ys := newMatrix(ntrain+ntest, 2), newMatrix(ntrain+ntest, 2)
+//===================================================================================
+func Test_sinhcosh(t *testing.T) {
 	//
 	// the /next/ stateful output is:
 	// weighted sums of the current input and Sine/Cosine function of the product
 	// of the previous input and the previous state...
 	// and vise versa!
 	//
-	ffill := func(i, iprev int) {
+	ffill := func(i, iprev int, Xs, Ys [][]float64) {
 		Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
-		Ys[i][0] = (1-alph)*Xs[i][1] + alph*math.Cos(Ys[iprev][0]*(1-Xs[iprev][0]))
-		Ys[i][1] = (1-alph)*Xs[i][0] + alph*math.Sin((1-Ys[iprev][1])*Xs[iprev][1])
+		Ys[i][0] = Xs[i][1] * math.Cosh(Ys[iprev][0]+Xs[iprev][0]) / 3
+		Ys[i][1] = Xs[i][0] * math.Sinh(Ys[iprev][1]+Xs[iprev][1]) / 3
 	}
+	nonPoly_R2R2(t, ffill)
+}
+
+func Test_sinecosine(t *testing.T) {
+	ffill := func(i, iprev int, Xs, Ys [][]float64) {
+		Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
+		Ys[i][0] = Xs[i][1] * math.Cos(Ys[iprev][0]+Xs[iprev][0])
+		Ys[i][1] = Xs[i][0] * math.Sin(Ys[iprev][1]+Xs[iprev][1])
+	}
+	nonPoly_R2R2(t, ffill)
+}
+
+// https://en.wikipedia.org/wiki/Astroid
+func Test_astroid(t *testing.T) {
+	ffill := func(i, iprev int, Xs, Ys [][]float64) {
+		Xs[i][0] = rand.Float64()
+		q := math.Cos(Xs[i][0])
+		Ys[i][0] = q * q * q
+		q = math.Sin(Xs[i][0])
+		Ys[i][1] = q * q * q
+	}
+	nonPoly_R2R2(t, ffill)
+}
+
+func nonPoly_R2R2(t *testing.T, ffill func(i, iprev int, Xs, Ys [][]float64)) {
+	rand.Seed(0)
+	input := NeuLayerConfig{size: 2}
+	hidden := NeuLayerConfig{"tanh", 4}
+	output := NeuLayerConfig{"sigmoid", 2}
+	var nn *NeuNetwork
+	if cli.lessrnn == 0 {
+		rnn := NewUnrolledRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
+		nn = &rnn.NeuNetwork
+	} else if cli.lessrnn >= hidden.size {
+		rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
+		nn = &rnn.NeuNetwork
+	} else if cli.lessrnn < 0 {
+		nn = NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
+	} else {
+		rnn := NewLimitedRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true}, hidden.size-cli.lessrnn)
+		nn = &rnn.NeuNetwork
+	}
+	nn.initXavier()
+
+	ntrain, ntest := 1000, 16
+	Xs, Ys := newMatrix(ntrain+ntest, 2), newMatrix(ntrain+ntest, 2)
 
 	converged := 0
-	ttp := &TTP{nn: &rnn.NeuNetwork, resultset: Ys[:ntrain], maxbackprops: 1E6, maxcost: 1E-4, sequential: true}
+	ttp := &TTP{nn: nn, resultset: Ys[:ntrain], maxbackprops: 5E6, maxcost: 1E-4, sequential: true}
 	for converged == 0 {
 		for i := 0; i < ntrain; i++ {
 			k := i - 1
 			if i == 0 { // wrap around to maintain the sequence in order
 				k = ntrain - 1
 			}
-			ffill(i, k)
+			ffill(i, k, Xs, Ys)
 		}
-		converged = rnn.Train(Xs[:ntrain], ttp)
+		converged = nn.Train(Xs[:ntrain], ttp)
 	}
 	mse := 0.0
 	for i := 0; i < ntest; i++ {
-		ffill(ntrain+i, ntrain+i-1)
+		ffill(ntrain+i, ntrain+i-1, Xs, Ys)
 	}
 	for i := 0; i < ntest; i++ {
 		j := ntrain + i
-		avec := rnn.Predict(Xs[j])
-		mse += rnn.CostMse(Ys[j])
+		avec := nn.Predict(Xs[j])
+		mse += nn.CostMse(Ys[j])
 		fmt.Printf(" -> %3.3v : %3.3v\n", avec, Ys[j])
 	}
-	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.nbackprops/1000)
+	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, nn.nbackprops/1000)
 }
