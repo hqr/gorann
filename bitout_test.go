@@ -6,55 +6,118 @@ import (
 	"testing"
 )
 
-func Test_bitoutput(t *testing.T) {
+func Test_axor8bits(t *testing.T) {
 	rand.Seed(0)
+	xor8bits(t, nnA8bits())
+}
+
+func Test_bxor8bits(t *testing.T) {
+	rand.Seed(0)
+	xor8bits(t, nnB8bits())
+}
+
+func Test_cxor8bits(t *testing.T) {
+	rand.Seed(0)
+	xor8bits(t, nnC8bits())
+}
+
+func Test_mixor8bits(t *testing.T) {
+	rand.Seed(0)
+	// mixer := NewWeightedMixerNN(nnA8bits(), nnB8bits(), nnC8bits())
+	mixer := NewWeightedMixerNN(nnB8bits(), nnA8bits())
+	nn := &mixer.NeuNetwork
+	xor8bits(t, nn)
+
+	for i := 0; i < len(mixer.nns); i++ {
+		osize := mixer.olayer.size
+		ii := i * osize
+		fmt.Printf("%.2v\n", mixer.weights[ii:ii+osize])
+	}
+}
+
+// common parts for the 3 tests above
+func nnA8bits() *NeuNetwork {
 	input := NeuLayerConfig{size: 16}
 	hidden := NeuLayerConfig{"sigmoid", 16}
 	output := NeuLayerConfig{"sigmoid", 8}
-	nn := NewNeuNetwork(input, hidden, 3, output, &NeuTunables{gdalgname: RMSprop})
+	nn := NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM})
 	nn.initXavier()
+	return nn
+}
 
-	xor8bits := func(xvec []float64) []float64 {
+func nnB8bits() *NeuNetwork {
+	input := NeuLayerConfig{size: 16}
+	hidden := NeuLayerConfig{"sigmoid", 32}
+	output := NeuLayerConfig{"sigmoid", 8}
+	nn := NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: RMSprop})
+	nn.initXavier()
+	return nn
+}
+
+func nnC8bits() *NeuNetwork {
+	input := NeuLayerConfig{size: 16}
+	hidden := NeuLayerConfig{"sigmoid", 48}
+	output := NeuLayerConfig{"sigmoid", 8}
+	nn := NewNeuNetwork(input, hidden, 1, output, &NeuTunables{gdalgname: RMSprop})
+	nn.initXavier()
+	return nn
+}
+
+func xor8bits(t *testing.T, nn *NeuNetwork) {
+	_xor8bits := func(xvec []float64) []float64 {
 		var y = make([]float64, 8)
 		for i := 0; i < 8; i++ {
 			y[i] = float64(int(xvec[i]) ^ int(xvec[8+i]))
 		}
 		return y
 	}
-	Xs := newMatrix(1000, 16)
-	for i := 0; i < len(Xs); i++ {
-		const maxint = int32(0xffff)
-		x := rand.Int31n(maxint)
-		for j := 0; j < 16; j++ {
-			Xs[i][j] = float64(x & 1)
-			x >>= 1
+	Xs := newMatrix(10000, 16)
+	const maxint = int32(0xffff)
+	// train data
+	fillrandom := func() {
+		for i := 0; i < len(Xs); i++ {
+			x := rand.Int31n(maxint)
+			for j := 0; j < 16; j++ {
+				Xs[i][j] = float64(x & 1)
+				x >>= 1
+			}
 		}
 	}
+	fillrandom()
 	converged := 0
-	ttp := &TTP{nn: nn, resultvalcb: xor8bits, pct: 50, maxbackprops: 5E5}
+	ttp := &TTP{nn: nn, resultvalcb: _xor8bits, pct: 50, maxbackprops: 5E5}
 	for converged == 0 {
 		converged = nn.Train(Xs, ttp)
 	}
 	var crossen, mse float64
-	for k := 0; k < 4; k++ {
+	// try the trained network on some new data
+	fillrandom()
+	for k := 0; k < 8; k++ {
 		i := int(rand.Int31n(int32(len(Xs))))
 		xvec := Xs[i]
-		yvec := xor8bits(xvec)
+		yvec := _xor8bits(xvec)
 		avec := nn.Predict(xvec)
 		crossen += nn.CostCrossEntropy(yvec)
 		mse += nn.CostMse(yvec)
+		mark := ""
 		for i := 0; i < 8; i++ {
 			if avec[i] < 0.4 {
 				avec[i] = 0
 			} else if avec[i] > 0.6 {
 				avec[i] = 1
 			}
+			if avec[i] != yvec[i] {
+				mark = "*"
+			}
 		}
-		fmt.Printf("%v ^ %v -> %.1v : %v\n", xvec[:8], xvec[8:], avec, yvec)
+		fmt.Printf("%v ^ %v -> %.1v : %v%s\n", xvec[:8], xvec[8:], avec, yvec, mark)
 	}
 	fmt.Printf("cross-entropy %.5f, mse %.5f\n", crossen/4, mse/4)
 }
 
+//==========================
+// test cross entropy cost
+//==========================
 func Test_classify(t *testing.T) {
 	rand.Seed(0)
 	nclasses := 3
@@ -106,71 +169,4 @@ func Test_classify(t *testing.T) {
 	if converged&ConvergedMaxBackprops > 0 {
 		t.Errorf("reached the maximum number of back propagations (%d)\n", nn.nbackprops)
 	}
-}
-
-// test wmixer - FIXME: bitoutput copy-paste
-func Test_mixer(t *testing.T) {
-	rand.Seed(0)
-	input1 := NeuLayerConfig{size: 16}
-	hidden1 := NeuLayerConfig{"sigmoid", 16}
-	output1 := NeuLayerConfig{"sigmoid", 8}
-	nn1 := NewNeuNetwork(input1, hidden1, 3, output1, &NeuTunables{gdalgname: RMSprop})
-	nn1.initXavier()
-
-	input2 := NeuLayerConfig{size: 16}
-	hidden2 := NeuLayerConfig{"sigmoid", 32}
-	output2 := NeuLayerConfig{"sigmoid", 8}
-	nn2 := NewNeuNetwork(input2, hidden2, 2, output2, &NeuTunables{gdalgname: RMSprop})
-	nn2.initXavier()
-
-	mixer := NewWeightedMixerNN(nn1, nn2)
-	nn := &mixer.NeuNetwork // not to change the code below
-
-	xor8bits := func(xvec []float64) []float64 {
-		var y = make([]float64, 8)
-		for i := 0; i < 8; i++ {
-			y[i] = float64(int(xvec[i]) ^ int(xvec[8+i]))
-		}
-		return y
-	}
-	Xs := newMatrix(1000, 16)
-	for i := 0; i < len(Xs); i++ {
-		const maxint = int32(0xffff)
-		x := rand.Int31n(maxint)
-		for j := 0; j < 16; j++ {
-			Xs[i][j] = float64(x & 1)
-			x >>= 1
-		}
-	}
-	converged := 0
-	ttp := &TTP{nn: nn, resultvalcb: xor8bits, pct: 50, maxbackprops: 5E5}
-	for converged == 0 {
-		converged = nn.Train(Xs, ttp)
-	}
-
-	// FIXME: debug
-	for i := 0; i < len(mixer.nns); i++ {
-		osize := mixer.olayer.size
-		ii := i * osize
-		fmt.Printf("%.2v\n", mixer.weights[ii:ii+osize])
-	}
-
-	var crossen, mse float64
-	for k := 0; k < 4; k++ {
-		i := int(rand.Int31n(int32(len(Xs))))
-		xvec := Xs[i]
-		yvec := xor8bits(xvec)
-		avec := nn.Predict(xvec)
-		crossen += nn.CostCrossEntropy(yvec)
-		mse += nn.CostMse(yvec)
-		for i := 0; i < 8; i++ {
-			if avec[i] < 0.4 {
-				avec[i] = 0
-			} else if avec[i] > 0.6 {
-				avec[i] = 1
-			}
-		}
-		fmt.Printf("%v ^ %v -> %.1v : %v\n", xvec[:8], xvec[8:], avec, yvec)
-	}
-	fmt.Printf("cross-entropy %.5f, mse %.5f\n", crossen/4, mse/4)
 }

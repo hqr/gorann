@@ -270,7 +270,6 @@ func (nn *NeuNetwork) Train_and_CheckGradients(xbatch [][]float64, ttp *TTP, idx
 }
 
 func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
-	assert(nn.cinput.size == len(xvec), fmt.Sprintf("num inputs: %d (must be %d)", len(xvec), nn.cinput.size))
 	assert(nn.coutput.size == len(yvec), fmt.Sprintf("num outputs: %d (must be %d)", len(yvec), nn.coutput.size))
 
 	nn.nnint.forward(xvec)

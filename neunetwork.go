@@ -16,6 +16,8 @@ type NeuNetworkInterface interface {
 	backpropGradients()
 	fixGradients(batchsize int)
 	fixWeights(batchsize int)
+	// cost
+	costfunction(yvec []float64) (cost float64)
 	// aux
 	populateInput(xvec []float64, normalize bool)
 	populateDeltas(deltas []float64)

@@ -180,6 +180,13 @@ func mulVectorElem(dst []float64, src []float64) {
 	}
 }
 
+// add number to a vector
+func addVectorNum(vec []float64, d float64) {
+	for c := 0; c < len(vec); c++ {
+		vec[c] += d
+	}
+}
+
 // element-wise add: dst += src
 func addVectorElem(dst []float64, src []float64) {
 	for c := 0; c < len(dst); c++ {
@@ -191,6 +198,13 @@ func addVectorElem(dst []float64, src []float64) {
 func addVectorElemAbs(dst []float64, src []float64) {
 	for c := 0; c < len(dst); c++ {
 		dst[c] += math.Abs(src[c])
+	}
+}
+
+// element-wise subtraction: dst -= src
+func subVectorElem(dst []float64, src []float64) {
+	for c := 0; c < len(dst); c++ {
+		dst[c] -= src[c]
 	}
 }
 
@@ -277,4 +291,10 @@ func max(a int, b int) int {
 		return a
 	}
 	return b
+}
+func fmin(a float64, b float64) float64 {
+	if a > b {
+		return b
+	}
+	return a
 }
