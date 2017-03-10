@@ -62,6 +62,13 @@ const (
 	DEFAULT_gamma = 0.9
 )
 
+// weight initialization
+const (
+	Random_1105 = 0
+	Random_11   = 1
+	Xavier      = 2
+)
+
 // neural network tunables - a superset
 type NeuTunables struct {
 	// hyperparameters used by various gradient descent alg-s
@@ -82,6 +89,7 @@ type NeuTunables struct {
 	gdalgname     string // gradient descent optimization algorithm (see above)
 	gdalgscopeall bool   // whether to apply optimization algorithm to all layers or just the one facing output
 	batchsize     int    // gradient descent: BatchSGD | BatchTrainingSet | minibatch
+	winit         int    // weight initialization: Ranom_1105 (default) | Random_11 | Xavier
 }
 
 //

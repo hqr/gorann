@@ -208,6 +208,13 @@ func subVectorElem(dst []float64, src []float64) {
 	}
 }
 
+// element-wise dst = math.Abs(dst - src)
+func subVectorElemAbs(dst []float64, src []float64) {
+	for c := 0; c < len(dst); c++ {
+		dst[c] = math.Abs(dst[c] - src[c])
+	}
+}
+
 func newVector(size int, args ...interface{}) []float64 {
 	v := make([]float64, size)
 	if len(args) == 0 {
@@ -287,6 +294,12 @@ func copyStruct(dst interface{}, src interface{}) {
 }
 
 func max(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+func fmax(a float64, b float64) float64 {
 	if a > b {
 		return a
 	}

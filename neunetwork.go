@@ -24,7 +24,11 @@ type NeuNetworkInterface interface {
 	// Get accessors
 	getCinput() *NeuLayerConfig
 	getCoutput() *NeuLayerConfig
+	getIsize() int
+	getHsize() int
+	getHnum() int
 	getTunables() *NeuTunables
+	getCallbacks() *NeuCallbacks
 }
 
 //
@@ -35,7 +39,7 @@ type NeuNetwork struct {
 	chidden   NeuLayerConfig
 	coutput   NeuLayerConfig
 	tunables  *NeuTunables
-	callbacks NeuCallbacks
+	callbacks *NeuCallbacks
 	//
 	layers     []*NeuLayer
 	lastidx    int
@@ -96,6 +100,9 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 	for idx := 0; idx <= nn.lastidx; idx++ {
 		layer := nn.layers[idx]
 		layer.init(nn)
+	}
+	if nn.tunables.winit == Xavier {
+		nn.initXavier()
 	}
 	// other useful tunables
 	// nn.tunables.gdalgscopeall = true
@@ -174,20 +181,12 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 		assert(layer.size == layer.config.size+1)
 		layer.avec[layer.config.size] = 1
 	}
-	// nor is it recommended
+	// nor is it recommended..
 	assert(layer.config.actfname != "softmax", "softmax activation for inner layers is currently not supported")
-	layer.weights = newMatrix(layer.size, layer.next.size, -1.0, 1.0)
-	next := layer.next
-	// init weights, alt init below
-	for i := 0; i < layer.size; i++ {
-		for j := 0; j < next.size; j++ {
-			if layer.weights[i][j] >= 0 && layer.weights[i][j] < 0.5 {
-				layer.weights[i][j] = 1 - layer.weights[i][j]
-			} else if layer.weights[i][j] < 0 && layer.weights[i][j] > -0.5 {
-				layer.weights[i][j] = -(1 + layer.weights[i][j])
-			}
-		}
-	}
+
+	// init weights
+	layer.winit(nn.tunables)
+
 	layer.gradient = newMatrix(layer.size, layer.next.size)
 	layer.pregradient = newMatrix(layer.size, layer.next.size)
 	layer.rmsgradient = newMatrix(layer.size, layer.next.size)
@@ -200,6 +199,40 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 		layer.rmswupdates = newMatrix(layer.size, layer.next.size)
 	} else if gdalgname == Rprop {
 		layer.wupdates = newMatrix(layer.size, layer.next.size)
+	}
+}
+
+func (layer *NeuLayer) winit(tunables *NeuTunables) {
+	next := layer.next
+	layer.weights = newMatrix(layer.size, next.size, -1.0, 1.0)
+	if tunables.winit == Random_1105 {
+		for i := 0; i < layer.size; i++ {
+			for j := 0; j < next.size; j++ {
+				if layer.weights[i][j] >= 0 && layer.weights[i][j] < 0.5 {
+					layer.weights[i][j] = 1 - layer.weights[i][j]
+				} else if layer.weights[i][j] < 0 && layer.weights[i][j] > -0.5 {
+					layer.weights[i][j] = -(1 + layer.weights[i][j])
+				}
+			}
+		}
+	}
+
+	// Xavier et al at http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
+}
+
+// Xavier et al at http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
+func (nn *NeuNetwork) initXavier() {
+	qsix := math.Sqrt(6)
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		next := layer.next
+		u := qsix / float64(layer.size+next.size)
+		d := u * 2
+		for i := 0; i < layer.size; i++ {
+			for j := 0; j < next.size; j++ {
+				layer.weights[i][j] = d*rand.Float64() - u
+			}
+		}
 	}
 }
 
@@ -240,26 +273,9 @@ func (nn *NeuNetwork) copyNetwork(from *NeuNetwork) {
 	}
 }
 
-// Xavier et al at http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
-func (nn *NeuNetwork) initXavier() {
-	qsix := math.Sqrt(6)
-	for l := 0; l < nn.lastidx; l++ {
-		layer := nn.layers[l]
-		next := layer.next
-		u := qsix / float64(layer.size+next.size)
-		d := u * 2
-		for i := 0; i < layer.size; i++ {
-			for j := 0; j < next.size; j++ {
-				layer.weights[i][j] = d*rand.Float64() - u
-			}
-		}
-	}
-}
-
 func (nn *NeuNetwork) populateInput(xvec []float64, normalize bool) {
-	assert(len(xvec) == nn.cinput.size)
 	var xnorm = xvec
-	if normalize && nn.callbacks.normcbX != nil {
+	if normalize && nn.callbacks != nil && nn.callbacks.normcbX != nil {
 		xnorm = cloneVector(xvec)
 		nn.callbacks.normcbX(xnorm)
 	}
@@ -437,12 +453,28 @@ func (nn *NeuNetwork) getCinput() *NeuLayerConfig {
 	return &nn.cinput
 }
 
+func (nn *NeuNetwork) getIsize() int {
+	return nn.cinput.size
+}
+
 func (nn *NeuNetwork) getCoutput() *NeuLayerConfig {
 	return &nn.coutput
 }
 
 func (nn *NeuNetwork) getTunables() *NeuTunables {
 	return nn.tunables
+}
+
+func (nn *NeuNetwork) getCallbacks() *NeuCallbacks {
+	return nn.callbacks
+}
+
+func (nn *NeuNetwork) getHsize() int {
+	return nn.chidden.size
+}
+
+func (nn *NeuNetwork) getHnum() int {
+	return len(nn.layers) - 2
 }
 
 //

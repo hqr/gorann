@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"testing"
 )
 
 func ExampleF_xorbits() {
@@ -22,7 +23,7 @@ func ExampleF_xorbits() {
 	denormalize := func(vec []float64) {
 		mulVectorNum(vec, float64(maxint))
 	}
-	nn.callbacks = NeuCallbacks{normalize, normalize, denormalize}
+	nn.callbacks = &NeuCallbacks{normalize, normalize, denormalize}
 
 	xorbits := func(xvec []float64) []float64 {
 		var y = []float64{0}
@@ -148,20 +149,24 @@ func ExampleF_sumsquares() {
 	// loss 1.067e-06
 }
 
+func nntestLog(sizehidden, numhidden int) *NeuNetwork {
+	input := NeuLayerConfig{size: 2}
+	hidden := NeuLayerConfig{"tanh", sizehidden}
+	output := NeuLayerConfig{"tanh", 1}
+	return NewNeuNetwork(input, hidden, numhidden, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10})
+}
+
 func ExampleF_sumlogarithms() {
 	rand.Seed(1)
-	input := NeuLayerConfig{size: 2}
-	hidden := NeuLayerConfig{"tanh", 8}
-	output := NeuLayerConfig{"tanh", 1}
-	nn := NewNeuNetwork(input, hidden, 5, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10})
+	nn := nntestLog(8, 5)
 
 	normalize := func(vec []float64) {
-		divVectorNum(vec, float64(-8))
+		divVectorNum(vec, float64(-18))
 	}
 	denormalize := func(vec []float64) {
-		mulVectorNum(vec, float64(-8))
+		mulVectorNum(vec, float64(-18))
 	}
-	nn.callbacks = NeuCallbacks{nil, normalize, denormalize}
+	nn.callbacks = &NeuCallbacks{nil, normalize, denormalize}
 
 	sumlogarithms := func(xvec []float64) []float64 {
 		var y = []float64{0}
@@ -170,17 +175,14 @@ func ExampleF_sumlogarithms() {
 		}
 		return y
 	}
-	Xs := newMatrix(100, 2)
-	ttp := &TTP{nn: nn, resultvalcb: sumlogarithms, repeat: 3, maxcost: 1E-5, maxbackprops: 1E6}
+	Xs := newMatrix(1000, 2)
+	ttp := &TTP{nn: nn, resultvalcb: sumlogarithms, repeat: 3, maxbackprops: 2E6}
 	var converged int
 	for converged == 0 {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
 		}
 		converged = nn.Train(Xs, ttp)
-	}
-	if converged&ConvergedMaxBackprops > 0 {
-		fmt.Printf("maxed out on back propagations %d\n", nn.nbackprops)
 	}
 	var mse float64
 	for i := 0; i < 4; i++ {
@@ -194,9 +196,54 @@ func ExampleF_sumlogarithms() {
 	}
 	fmt.Printf("mse %.4e\n", mse/4)
 	// Output:
-	// log(0.304) + log(0.288) -> -2.427 : -2.437
-	// log(0.431) + log(0.037) -> -4.205 : -4.134
-	// log(0.519) + log(0.767) -> -0.925 : -0.921
-	// log(0.834) + log(0.322) -> -1.332 : -1.315
-	// mse 1.0427e-05
+	// log(0.456) + log(0.173) -> -2.447 : -2.538
+	// log(0.245) + log(0.146) -> -3.223 : -3.327
+	// log(0.756) + log(0.542) -> -0.787 : -0.892
+	// log(0.084) + log(0.412) -> -3.292 : -3.362
+	// mse 6.8764e-05
+}
+
+// copy-paste
+func Test_mixlnarithms(t *testing.T) {
+	rand.Seed(1)
+	// mixer := NewWeightedGradientNN(nntestLog(8, 4), nntestLog(8, 5))
+	mixer := NewWeightedGradientNN(nntestLog(8, 2), nntestLog(8, 4), nntestLog(8, 5))
+	// mixer := NewWeightedMixerNN(nntestLog(8, 2), nntestLog(8, 4), nntestLog(8, 5))
+	nn := &mixer.NeuNetwork
+
+	normalize := func(vec []float64) {
+		divVectorNum(vec, float64(-18))
+	}
+	denormalize := func(vec []float64) {
+		mulVectorNum(vec, float64(-18))
+	}
+	nn.callbacks = &NeuCallbacks{nil, normalize, denormalize}
+
+	sumlogarithms := func(xvec []float64) []float64 {
+		var y = []float64{0}
+		for i := 0; i < len(xvec); i++ {
+			y[0] += math.Log(xvec[i])
+		}
+		return y
+	}
+	Xs := newMatrix(1000, 2)
+	ttp := &TTP{nn: nn, resultvalcb: sumlogarithms, repeat: 3, maxbackprops: 2E6}
+	var converged int
+	for converged == 0 {
+		for i := 0; i < len(Xs); i++ {
+			Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
+		}
+		converged = nn.Train(Xs, ttp)
+	}
+	var mse float64
+	for i := 0; i < 4; i++ {
+		var xvec = []float64{0, 0}
+		xvec[0] = rand.Float64()
+		xvec[1] = rand.Float64()
+		y2 := sumlogarithms(xvec)
+		y1 := nn.Predict(xvec)
+		mse += nn.costfunction(y2)
+		fmt.Printf("log(%.3f) + log(%.3f) -> %.3f : %.3f\n", xvec[0], xvec[1], y1[0], y2[0])
+	}
+	fmt.Printf("mse %.4e\n", mse/4)
 }

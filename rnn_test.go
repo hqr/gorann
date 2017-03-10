@@ -13,8 +13,7 @@ func Test_pcavg(t *testing.T) {
 	input := NeuLayerConfig{size: 1}
 	hidden := NeuLayerConfig{"sigmoid", 4}
 	output := NeuLayerConfig{"sigmoid", 1}
-	rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10}) //, gdalgscopeall: true})
-	rnn.initXavier()
+	rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: Xavier})
 	rnn.layers[1].config.actfname = "tanh"
 	ntrain, ngrad, ntest := 1000, rnn.tunables.batchsize, 8
 	Xs, Ys := newMatrix(ntrain+ngrad+ntest, 1), newMatrix(ntrain+ngrad+ntest, 1)
@@ -68,9 +67,8 @@ func Test_emavg(t *testing.T) {
 	hidden := NeuLayerConfig{"sigmoid", 4}
 	output := NeuLayerConfig{"sigmoid", 1}
 	// rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 1, gdalgscopeall: true})
-	rnn := NewLimitedRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 1, gdalgscopeall: true}, 1)
+	rnn := NewLimitedRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 1, gdalgscopeall: true, winit: Xavier}, 1)
 	rnn.layers[1].config.actfname = "tanh"
-	rnn.initXavier()
 
 	ntrain, ntest, alph := 1000, 8, 0.6
 	Xs, Ys := newMatrix(ntrain+ntest, 1), newMatrix(ntrain+ntest, 1)
@@ -116,8 +114,7 @@ func Test_histpoly(t *testing.T) {
 	hidden := NeuLayerConfig{"tanh", 8}
 	output := NeuLayerConfig{"sigmoid", 2}
 	// rnn := NewUnrolledRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 10, gdalgscopeall: true})
-	rnn := NewLimitedRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 10, gdalgscopeall: true}, 2)
-	rnn.initXavier()
+	rnn := NewLimitedRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 10, gdalgscopeall: true, winit: Xavier}, 2)
 
 	ntrain, ntest, alph := 1000, 8, 0.6
 	Xs, Ys := newMatrix(ntrain+ntest, 2), newMatrix(ntrain+ntest, 2)
@@ -200,31 +197,58 @@ func Test_astroid(t *testing.T) {
 	nonPoly_R2R2(t, ffill)
 }
 
+func nntestUnrolled() *UnrolledRnn {
+	input := NeuLayerConfig{size: 2}
+	output := NeuLayerConfig{"sigmoid", 2}
+	hidden := NeuLayerConfig{"tanh", 8}
+	return NewUnrolledRnn(input, hidden, 1, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true, winit: Xavier})
+}
+
+func nntestNaive() *NaiveRnn {
+	input := NeuLayerConfig{size: 2}
+	output := NeuLayerConfig{"sigmoid", 2}
+	hidden := NeuLayerConfig{"sigmoid", 4}
+	return NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true, winit: Xavier})
+}
+
+func nntestLimited(numconns int) *LimitedRnn {
+	input := NeuLayerConfig{size: 2}
+	output := NeuLayerConfig{"sigmoid", 2}
+	hidden := NeuLayerConfig{"tanh", 8}
+	return NewLimitedRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true, winit: Xavier}, numconns)
+}
+
 func nonPoly_R2R2(t *testing.T, ffill func(i, iprev int, Xs, Ys [][]float64)) {
 	rand.Seed(0)
-	input := NeuLayerConfig{size: 2}
-	hidden := NeuLayerConfig{"tanh", 4}
-	output := NeuLayerConfig{"sigmoid", 2}
 	var nn *NeuNetwork
 	if cli.lessrnn == 0 {
-		rnn := NewUnrolledRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
+		fmt.Println("unrolled")
+		rnn := nntestUnrolled()
 		nn = &rnn.NeuNetwork
-	} else if cli.lessrnn >= hidden.size {
-		rnn := NewNaiveRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
+	} else if cli.lessrnn >= 4 {
+		fmt.Println("naive")
+		rnn := nntestNaive()
 		nn = &rnn.NeuNetwork
 	} else if cli.lessrnn < 0 {
-		nn = NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true})
+		fmt.Println("mixed")
+		rnn1 := nntestUnrolled()
+		rnn2 := nntestNaive()
+		rnn3 := nntestLimited(2) // 2 neuron conn-s
+		mixer := NewWeightedGradientNN(rnn1, rnn2, rnn3)
+		// mixer := NewWeightedMixerNN(rnn1, rnn2, rnn3)
+		// mixer := NewWeightedMixerNN(rnn1, rnn2)
+		nn = &mixer.NeuNetwork
 	} else {
-		rnn := NewLimitedRnn(input, hidden, 2, output, &NeuTunables{gdalgname: ADAM, batchsize: 100, gdalgscopeall: true}, hidden.size-cli.lessrnn)
+		fmt.Println("limited", cli.lessrnn)
+		rnn := nntestLimited(cli.lessrnn)
 		nn = &rnn.NeuNetwork
 	}
-	nn.initXavier()
 
 	ntrain, ntest := 1000, 16
 	Xs, Ys := newMatrix(ntrain+ntest, 2), newMatrix(ntrain+ntest, 2)
 
 	converged := 0
-	ttp := &TTP{nn: nn, resultset: Ys[:ntrain], maxbackprops: 5E6, maxcost: 1E-4, sequential: true}
+	ttp := &TTP{nn: nn, resultset: Ys[:ntrain], maxbackprops: 1E7, sequential: true}
 	for converged == 0 {
 		for i := 0; i < ntrain; i++ {
 			k := i - 1
