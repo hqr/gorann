@@ -157,6 +157,33 @@ func Test_transform_48_2(t *testing.T) {
 	transformBits(t, nn)
 }
 
+func Test_transform_32_2(t *testing.T) {
+	rand.Seed(0)
+	input := NeuLayerConfig{size: 16}
+	hidden := NeuLayerConfig{"sigmoid", 32}
+	output := NeuLayerConfig{"sigmoid", 16}
+	nn := NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: Xavier})
+	transformBits(t, nn)
+}
+
+func Test_transform_40_1(t *testing.T) {
+	rand.Seed(0)
+	input := NeuLayerConfig{size: 16}
+	hidden := NeuLayerConfig{"sigmoid", 40}
+	output := NeuLayerConfig{"sigmoid", 16}
+	nn := NewNeuNetwork(input, hidden, 1, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: Xavier})
+	transformBits(t, nn)
+}
+
+func Test_transform_48_1(t *testing.T) {
+	rand.Seed(0)
+	input := NeuLayerConfig{size: 16}
+	hidden := NeuLayerConfig{"sigmoid", 48}
+	output := NeuLayerConfig{"sigmoid", 16}
+	nn := NewNeuNetwork(input, hidden, 1, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: Xavier})
+	transformBits(t, nn)
+}
+
 func Test_mixtransform(t *testing.T) {
 	rand.Seed(0)
 	input := NeuLayerConfig{size: 16}
@@ -237,7 +264,7 @@ func transformBits(t *testing.T, nn *NeuNetwork) {
 				mark = "*"
 			}
 		}
-		fmt.Printf("%v ^ %v -> %.1v : %v%s\n", xvec[:8], xvec[8:], avec, yvec, mark)
+		fmt.Printf("log(%v) -> %.1v : %v%s\n", xvec, avec, yvec, mark)
 	}
 	fmt.Printf("cross-entropy %.5f, mse %.5f\n", crossen/float64(num), mse/float64(num))
 }
