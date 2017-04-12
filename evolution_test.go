@@ -28,7 +28,7 @@ func Test_nespy(t *testing.T) {
 	w := newVector(3, 0.0, 1.0, "normal")
 	for i := 0; i < 300; i++ {
 		if i%20 == 0 {
-			fmt.Printf("%d, %v, %.5f\n", i, w, f(w))
+			fmt.Printf("%d, %.5v, %.5f\n", i, w, f(w))
 		}
 
 		N := newMatrix(npop, 3, 0.0, 1.0, "normal")
@@ -55,6 +55,44 @@ func Test_nespy(t *testing.T) {
 		for j := 0; j < npop; j++ {
 			mulVectorNum(N[j], lrate*A[j])
 			addVectorElem(w, N[j])
+		}
+	}
+}
+
+func Test_nespy_alt(t *testing.T) {
+	rand.Seed(0)
+	var rThresh = 0.9
+	w := newVector(3, 0.0, 1.0, "normal")
+	for i := 0; i < 300; i++ {
+		if i%20 == 0 {
+			fmt.Printf("%d, %.5v, %.5f\n", i, w, f(w))
+		}
+
+		N := newMatrix(npop, 3, 0.0, 1.0, "normal")
+		R := newVector(npop)
+
+		for j := 0; j < npop; j++ {
+			// w_try := w + sigma*N[j]
+			mulVectorNum(N[j], sigma)
+			w_try := cloneVector(w)
+			addVectorElem(w_try, N[j])
+			R[j] = f(w_try) // evaluate the jittered version
+		}
+
+		// standardize the rewards to have a gaussian distribution
+		// A = (R - np.mean(R)) / np.std(R)
+		A := cloneVector(R)
+		standardizeVectorZscore(A)
+		for j := 0; j < npop; j++ {
+			// prioritize those parameter updates that yield bigger rewards
+			if A[j] > rThresh {
+				mulVectorNum(N[j], 0.1*A[j])
+				addVectorElem(w, N[j])
+				rThresh += 0.001
+			} else {
+				mulVectorNum(N[j], alpha*A[j])
+				addVectorElem(w, N[j])
+			}
 		}
 	}
 }
