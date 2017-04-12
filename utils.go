@@ -26,13 +26,7 @@ func assert(cond bool, args ...interface{}) {
 func newMatrix(rows, cols int, args ...interface{}) [][]float64 {
 	m := make([][]float64, rows)
 	for i := 0; i < rows; i++ {
-		if len(args) == 0 {
-			m[i] = newVector(cols)
-		} else if len(args) == 1 {
-			m[i] = newVector(cols, args[0])
-		} else if len(args) == 2 {
-			m[i] = newVector(cols, args[0], args[1])
-		}
+		m[i] = newVector(cols, args...)
 	}
 	return m
 }
@@ -129,6 +123,18 @@ func normL2VectorSquared(avec []float64, bvec []float64) float64 {
 		}
 	}
 	return edist
+}
+
+// z-score standardization
+func standardizeVectorZscore(vec []float64) {
+	mean, flen := 0.0, float64(len(vec))
+	for c := 0; c < len(vec); c++ {
+		mean += vec[c]
+	}
+	mean /= flen
+	addVectorNum(vec, -mean)
+	std := math.Sqrt(normL2VectorSquared(vec, nil) / flen)
+	divVectorNum(vec, std)
 }
 
 func normL1Vector(avec []float64, bvec []float64) float64 {
@@ -228,13 +234,24 @@ func newVector(size int, args ...interface{}) []float64 {
 		return v
 	}
 	// fill in with random values between spec-ed boundaries
-	assert(len(args) == 2)
-	left := args[0].(float64)
-	right := args[1].(float64)
-	assert(right > left)
-	d := right - left
+	if len(args) == 2 {
+		left := args[0].(float64)
+		right := args[1].(float64)
+		assert(right > left)
+		d := right - left
+		for i := 0; i < size; i++ {
+			v[i] = d*rand.Float64() + left
+		}
+		return v
+	}
+
+	assert(len(args) == 3)
+	dist := args[2].(string)
+	assert(dist == "normal")
+	mean := args[0].(float64)
+	std := args[1].(float64)
 	for i := 0; i < size; i++ {
-		v[i] = d*rand.Float64() + left
+		v[i] = rand.NormFloat64()*std + mean
 	}
 	return v
 }
