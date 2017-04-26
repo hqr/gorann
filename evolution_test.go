@@ -9,26 +9,25 @@ import (
 	"testing"
 )
 
-func f(w []float64) float64 {
+func fn_nespy(w []float64, solution []float64) float64 {
 	// reward = -np.sum(np.square(solution - w))
 	return -normL2VectorSquared(solution, w)
 }
 
-// hyperparameters
-var npop = 50     // population size
-var sigma = 0.1   // noise standard deviation
-var alpha = 0.001 // learning rate
-
-// start the optimization
-var solution = []float64{0.5, 0.1, -0.3}
-
 func Test_nespy(t *testing.T) {
 	rand.Seed(0)
+	// hyperparameters
+	var npop = 50     // population size
+	var sigma = 0.1   // noise standard deviation
+	var alpha = 0.001 // learning rate
+
+	// start the optimization
+	var solution = []float64{0.5, 0.1, -0.3}
 
 	w := newVector(3, 0.0, 1.0, "normal")
 	for i := 0; i < 300; i++ {
 		if i%20 == 0 {
-			fmt.Printf("%d, %.5v, %.5f\n", i, w, f(w))
+			fmt.Printf("%d, %.5v, %.5f\n", i, w, fn_nespy(w, solution))
 		}
 
 		N := newMatrix(npop, 3, 0.0, 1.0, "normal")
@@ -40,7 +39,7 @@ func Test_nespy(t *testing.T) {
 			mulVectorNum(nj, sigma)
 			w_try := cloneVector(w)
 			addVectorElem(w_try, nj)
-			R[j] = f(w_try) // evaluate the jittered version
+			R[j] = fn_nespy(w_try, solution) // evaluate the jittered version
 		}
 
 		// standardize the rewards to have a gaussian distribution
@@ -61,11 +60,18 @@ func Test_nespy(t *testing.T) {
 
 func Test_nespy_alt(t *testing.T) {
 	rand.Seed(0)
+	// hyperparameters
+	var npop = 50     // population size
+	var sigma = 0.1   // noise standard deviation
+	var alpha = 0.001 // learning rate
+
+	// start the optimization
+	var solution = []float64{0.5, 0.1, -0.3}
 	var rThresh = 0.9
 	w := newVector(3, 0.0, 1.0, "normal")
 	for i := 0; i < 300; i++ {
 		if i%20 == 0 {
-			fmt.Printf("%d, %.5v, %.5f\n", i, w, f(w))
+			fmt.Printf("%d, %.5v, %.5f\n", i, w, fn_nespy(w, solution))
 		}
 
 		N := newMatrix(npop, 3, 0.0, 1.0, "normal")
@@ -76,7 +82,7 @@ func Test_nespy_alt(t *testing.T) {
 			mulVectorNum(N[j], sigma)
 			w_try := cloneVector(w)
 			addVectorElem(w_try, N[j])
-			R[j] = f(w_try) // evaluate the jittered version
+			R[j] = fn_nespy(w_try, solution) // evaluate the jittered version
 		}
 
 		// standardize the rewards to have a gaussian distribution

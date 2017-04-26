@@ -51,6 +51,14 @@ func copyMatrix(dst [][]float64, src [][]float64) {
 	}
 }
 
+func addMatrixElem(dst [][]float64, src [][]float64) {
+	rows := len(src)
+	assert(rows == len(dst))
+	for r := 0; r < rows; r++ {
+		addVectorElem(dst[r], src[r])
+	}
+}
+
 func zeroMatrix(mat [][]float64) {
 	rows := len(mat)
 	for r := 0; r < rows; r++ {
@@ -89,6 +97,13 @@ func ppMatrix(name string, mat [][]float64) {
 }
 */
 
+func mulMatrixNum(mat [][]float64, d float64) {
+	for r := 0; r < len(mat); r++ {
+		row := mat[r]
+		mulVectorNum(row, d)
+	}
+}
+
 func divMatrixNum(mat [][]float64, d float64) {
 	for r := 0; r < len(mat); r++ {
 		row := mat[r]
@@ -125,13 +140,27 @@ func normL2VectorSquared(avec []float64, bvec []float64) float64 {
 	return edist
 }
 
-// z-score standardization
-func standardizeVectorZscore(vec []float64) {
-	mean, flen := 0.0, float64(len(vec))
+func meanVector(vec []float64) (mean float64) {
+	flen := float64(len(vec))
 	for c := 0; c < len(vec); c++ {
 		mean += vec[c]
 	}
 	mean /= flen
+	return
+}
+func meanStdVector(vec []float64) (mean, std float64) {
+	flen := float64(len(vec))
+	mean = meanVector(vec)
+	cpy := cloneVector(vec)
+	addVectorNum(cpy, -mean)
+	std = math.Sqrt(normL2VectorSquared(cpy, nil) / flen)
+	return
+}
+
+// z-score standardization
+func standardizeVectorZscore(vec []float64) {
+	flen := float64(len(vec))
+	mean := meanVector(vec)
 	addVectorNum(vec, -mean)
 	std := math.Sqrt(normL2VectorSquared(vec, nil) / flen)
 	divVectorNum(vec, std)
