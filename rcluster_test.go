@@ -226,6 +226,7 @@ func (initiator *Initiator) evolution() {
 	b := initiator.nn.tunables.batchsize
 	Xs, Ys := newMatrix(b, rclr.hisize), newVector(b)
 	rewards := newVector(rclr.npertub * 2)
+
 	noise := make([][][]float64, rclr.npertub)
 	negnoise := make([][][]float64, rclr.npertub)
 
@@ -269,21 +270,25 @@ func (initiator *Initiator) evolve() {
 
 // "disturb" the weights (normally, at std 0.1) - to optimize the rewards
 func (initiator *Initiator) accumulateUpdates(xvec []float64, y float64, l int, rewards []float64, noise, negnoise [][][]float64) {
-	layer := initiator.nn.layers[l]
+	layer, layer_cpy := initiator.nn.layers[l], initiator.nn_cpy.layers[l]
 	next := layer.next
-	layer_cpy := initiator.nn_cpy.layers[l]
 	copyMatrix(layer_cpy.weights, layer.weights)
+
+	for j := 0; j < rclr.npertub; j++ {
+		noise[j] = newMatrix(layer.size, next.size)
+		negnoise[j] = newMatrix(layer.size, next.size)
+	}
 
 	initiator.nn.populateInput(xvec, true)
 	for jj, j := 0, 0; j < rclr.npertub; j++ {
 		// noise (mean = 0, std = sigma)
-		noise[j] = newMatrix(layer.size, next.size, 0.0, 1.0, "normal")
+		fillMatrixNormal(noise[j], 0.0, 1.0, initiator.id)
 		mulMatrixNum(noise[j], rclr.sigma)
-		// and neg(noise)
-		negnoise[j] = cloneMatrix(noise[j])
+		// and a "negative" noise
+		copyMatrix(negnoise[j], noise[j])
 		mulMatrixNum(negnoise[j], -1.0)
 		//
-		// jitter this layer's weights, compute rewards
+		// jitter this layer's weights, compute the rewards
 		//
 		addMatrixElem(layer.weights, noise[j])
 		avec := initiator.nn.reForward()

@@ -66,6 +66,13 @@ func zeroMatrix(mat [][]float64) {
 	}
 }
 
+func fillMatrixNormal(mat [][]float64, mean, std float64, skip int) {
+	rows := len(mat)
+	for r := 0; r < rows; r++ {
+		fillVectorNormal(mat[r], mean, std, skip)
+	}
+}
+
 func mulColVec(mat [][]float64, c int, vec []float64, count int) float64 {
 	var sum float64
 	for r := 0; r < count; r++ {
@@ -288,6 +295,15 @@ func newVector(size int, args ...interface{}) []float64 {
 func fillVector(vec []float64, x float64) {
 	for i := 0; i < len(vec); i++ {
 		vec[i] = x
+	}
+}
+
+func fillVectorNormal(vec []float64, mean, std float64, skip int) {
+	for i := 0; i < skip; i++ {
+		_ = rand.NormFloat64()
+	}
+	for i := 0; i < len(vec); i++ {
+		vec[i] = rand.NormFloat64()*std + mean
 	}
 }
 
