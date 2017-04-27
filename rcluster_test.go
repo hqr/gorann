@@ -17,6 +17,7 @@ type Initiator struct {
 	target  *Target
 	minlat  float64
 	distory []float64 // [[selectcnt / ni]]
+	gnoise  [][][][]float64
 	score   int
 	id      int
 }
@@ -48,10 +49,12 @@ type RCLR struct {
 	hisize                 int     // target (selection) history size
 	coperiod               int     // colaboration = scoring period: number of steps (epochs)
 	idelay, tdelay         int     // initiator and target "delay" as far as the history of the target /selections/
-	npertub, res1          int     // half number of the NN weight /pertubations/ (evolution only)
+	nperturb               int     // half the number of the NN weight /perturbations/ (evolution only)
+	sparsity               int     // jitter sparsity: percentage of the weights that get jittered = 100 - sparsity
 	batchsize, numhid      int     // NN batchsize, NN number of hidden layers
 	gdalg                  string  // NN gradient descent algorithm
 	useGD                  bool    // whether to /evolve/ or use GD
+	repeatevo              bool    // whether to reuse a given mini-batch to /evolve/ once more
 	fnlatency              func(h []float64) float64
 }
 
@@ -63,15 +66,17 @@ func init() {
 		0.1, 0.001, 0.001, // gaussian sigma, learning rate, epsilon (evolution only)
 		0.9, 0.01, //         high(er) reward threshold and the corresponding learning rate (evolution only)
 		1.1,         //       service rate: num requests target can handle during one epoch step
-		1000.1, 1.3, //       low(TODO) and high scoring thresholds that control inter-initiator weights exchange
+		1000.1, 1.3, //       low(TODO) and high scoring thresholds, to control inter-initiator weight exchange
 		10, 10, 5000, 3, //   numbers of initiators and targets, max num of steps, number of replicas
-		30,     //            target history size - selection counts that each target keeps back in time
-		100,    //            colaboration = scoring period: number of steps (epochs)
-		0,      //            (0, 1) => initiator and target see the same exact history
-		1,      //            (1, 0) => initiator's history is two epochs older than the target's
-		50, -1, //            half number of the NN weight /pertubations/ (evolution only)
+		30,          //       target history size - selection counts that each target keeps back in time
+		100,         //       colaboration = scoring period: number of steps (epochs)
+		0,           //       (0, 1) => initiator and target see the same exact history
+		1,           //       (1, 0) => initiator's history is two epochs older than the target's
+		32,          //       half the number of the NN weight /perturbations/ (evolution only)
+		0,           //       jitter sparsity
 		10, 2, ADAM, //       NN: batchsize, number of hidden layers, GD optimization algorithm
 		false,       //       true - use GD, false - run evolution
+		true,        //       repeat evolution
 		fn4_latency, //       the latency function
 	}
 	ivec = make([]*Initiator, rclr.ni)
@@ -97,7 +102,7 @@ func Test_rcluster(t *testing.T) {
 		}
 	}
 
-	for step := 0; step < rclr.nsteps; step++ {
+	for step := 1; step <= rclr.nsteps; step++ {
 		compute_I() // I: select 3 rep-holding Ts, compute latencies based on (delayed) uvecs, select the T min
 		compute_T() // T: given the selections (see prev step), compute "true" latencies and append to the uvecs
 		score_I()   // I: +1 if selected the fastest target out of 3
@@ -128,7 +133,7 @@ func Test_rcluster(t *testing.T) {
 			// 	L[i] = target.currlat
 			// }
 			// fmt.Printf("C: %.3f\n", C)
-			fmt.Printf("S: %.3f\n", S)
+			fmt.Printf("%3d: %.3f\n", step/rclr.coperiod, S)
 			// fmt.Printf("L: %.3f\n\n", L)
 		}
 	}
@@ -152,12 +157,28 @@ func construct_I() {
 		nn_cpy := NewNeuNetwork(input, hidden, rclr.numhid, output, &NeuTunables{})
 		nn_cpy.copyNetwork(nn)
 
-		ivec[i] = &Initiator{
+		initiator := &Initiator{
 			nn:      nn,
 			nn_cpy:  nn_cpy,
 			reptvec: make([]*Target, rclr.copies),
 			distory: newVector(rclr.hisize),
 			id:      i}
+
+		if !rclr.useGD {
+			initiator.gnoise = make([][][][]float64, rclr.numhid+1)
+			for l := 0; l < rclr.numhid+1; l++ {
+				initiator.gnoise[l] = make([][][]float64, rclr.nperturb*2)
+				layer := initiator.nn.layers[l]
+				next := layer.next
+				for jj, j := 0, 0; j < rclr.nperturb; j++ {
+					initiator.gnoise[l][jj] = newMatrix(layer.size, next.size)
+					jj++
+					initiator.gnoise[l][jj] = newMatrix(layer.size, next.size)
+					jj++
+				}
+			}
+		}
+		ivec[i] = initiator
 	}
 }
 
@@ -225,10 +246,7 @@ OUTER:
 func (initiator *Initiator) evolution() {
 	b := initiator.nn.tunables.batchsize
 	Xs, Ys := newMatrix(b, rclr.hisize), newVector(b)
-	rewards := newVector(rclr.npertub * 2)
-
-	noise := make([][][]float64, rclr.npertub)
-	negnoise := make([][][]float64, rclr.npertub)
+	rewards := newVector(rclr.nperturb * 2)
 
 	// iterate over NN layers, one layer's weights at a time
 	num := initiator.nn.getHnum() + 1
@@ -243,11 +261,19 @@ func (initiator *Initiator) evolution() {
 		Xs[i] = cloneVector(initiator.distory)
 		Ys[i] = initiator.target.currlat
 
-		initiator.accumulateUpdates(Xs[i], Ys[i], (l % num), rewards, noise, negnoise)
+		initiator.accumulateUpdates(Xs[i], Ys[i], (l % num), rewards, false)
 		l++
 		i++
 		if i == b {
 			initiator.evolve()
+			if rclr.repeatevo {
+				for ii := 0; ii < b; ii++ {
+					fillVector(rewards, 0)
+					initiator.accumulateUpdates(Xs[ii], Ys[ii], (l % num), rewards, true)
+					l++
+					initiator.evolve()
+				}
+			}
 			i = 0
 		}
 
@@ -269,64 +295,61 @@ func (initiator *Initiator) evolve() {
 }
 
 // "disturb" the weights (normally, at std 0.1) - to optimize the rewards
-func (initiator *Initiator) accumulateUpdates(xvec []float64, y float64, l int, rewards []float64, noise, negnoise [][][]float64) {
+func (initiator *Initiator) accumulateUpdates(xvec []float64, y float64, l int, rewards []float64, repeating bool) {
 	layer, layer_cpy := initiator.nn.layers[l], initiator.nn_cpy.layers[l]
-	next := layer.next
 	copyMatrix(layer_cpy.weights, layer.weights)
 
-	for j := 0; j < rclr.npertub; j++ {
-		noise[j] = newMatrix(layer.size, next.size)
-		negnoise[j] = newMatrix(layer.size, next.size)
+	// generate random normal jitter for the layer l weights
+	// when repeating, simply recompute rewards for the previously generated jitter..
+	noisycube := initiator.gnoise[l]
+	if !repeating {
+		for jj, j := 0, 0; j < rclr.nperturb; j++ {
+			fillMatrixNormal(noisycube[jj], 0.0, 1.0, initiator.id, rclr.sparsity)
+			mulMatrixNum(noisycube[jj], rclr.sigma)
+			copyMatrix(noisycube[jj+1], noisycube[jj])
+			mulMatrixNum(noisycube[jj+1], -1.0)
+			jj += 2
+		}
 	}
-
+	//
+	// estimate the rewards for all 2*nperturb perturbations
+	//
 	initiator.nn.populateInput(xvec, true)
-	for jj, j := 0, 0; j < rclr.npertub; j++ {
-		// noise (mean = 0, std = sigma)
-		fillMatrixNormal(noise[j], 0.0, 1.0, initiator.id)
-		mulMatrixNum(noise[j], rclr.sigma)
-		// and a "negative" noise
-		copyMatrix(negnoise[j], noise[j])
-		mulMatrixNum(negnoise[j], -1.0)
-		//
-		// jitter this layer's weights, compute the rewards
-		//
-		addMatrixElem(layer.weights, noise[j])
+	for jj, j := 0, 0; j < rclr.nperturb; j++ {
+		addMatrixElem(layer.weights, noisycube[jj])
 		avec := initiator.nn.reForward()
-		// reward
 		rewards[jj] = -math.Pow(avec[0]-y, 2)
-		jj++
-		// restore
 		copyMatrix(layer.weights, layer_cpy.weights)
 		//
-		// and again, the same with a negative noise
+		// and again, this time with a "negative" noise
 		//
-		addMatrixElem(layer.weights, negnoise[j])
+		addMatrixElem(layer.weights, noisycube[jj+1])
 		avec = initiator.nn.reForward()
-		// reward
-		rewards[jj] = -math.Pow(avec[0]-y, 2)
-		jj++
-		// restore
+		rewards[jj+1] = -math.Pow(avec[0]-y, 2)
 		copyMatrix(layer.weights, layer_cpy.weights)
+		jj += 2
 	}
-	// standardize the rewards and update the weights
+	//
+	// standardize the rewards and update the gradient
+	//
 	standardizeVectorZscore(rewards)
-	for jj, j := 0, 0; j < rclr.npertub; j++ {
-		jj = j * 2
+	for jj, j := 0, 0; j < rclr.nperturb; j++ {
 		if rewards[jj] > rewards[jj+1]+rclr.epsilon {
 			if rewards[jj] > rclr.highreward {
-				mulMatrixNum(noise[j], rclr.hialpha*rewards[jj])
+				mulMatrixNum(noisycube[jj], rclr.hialpha*rewards[jj])
 			} else {
-				mulMatrixNum(noise[j], rclr.alpha*rewards[jj])
+				mulMatrixNum(noisycube[jj], rclr.alpha*rewards[jj])
 			}
-			addMatrixElem(layer.gradient, noise[j])
+			addMatrixElem(layer.gradient, noisycube[jj])
 		} else if rewards[jj+1] > rewards[jj]+rclr.epsilon {
 			if rewards[jj+1] > rclr.highreward {
-				mulMatrixNum(negnoise[j], rclr.hialpha*rewards[jj+1])
+				mulMatrixNum(noisycube[jj+1], rclr.hialpha*rewards[jj+1])
 			} else {
-				mulMatrixNum(negnoise[j], rclr.alpha*rewards[jj+1])
+				mulMatrixNum(noisycube[jj+1], rclr.alpha*rewards[jj+1])
 			}
-			addMatrixElem(layer.gradient, negnoise[j])
+			addMatrixElem(layer.gradient, noisycube[jj+1])
 		}
+		jj += 2
 	}
 }
 

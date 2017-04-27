@@ -66,10 +66,10 @@ func zeroMatrix(mat [][]float64) {
 	}
 }
 
-func fillMatrixNormal(mat [][]float64, mean, std float64, skip int) {
+func fillMatrixNormal(mat [][]float64, mean, std float64, skip int, sparsity int) {
 	rows := len(mat)
 	for r := 0; r < rows; r++ {
-		fillVectorNormal(mat[r], mean, std, skip)
+		fillVectorNormal(mat[r], mean, std, skip, sparsity)
 	}
 }
 
@@ -298,12 +298,16 @@ func fillVector(vec []float64, x float64) {
 	}
 }
 
-func fillVectorNormal(vec []float64, mean, std float64, skip int) {
+func fillVectorNormal(vec []float64, mean, std float64, skip int, sparsity int) {
 	for i := 0; i < skip; i++ {
 		_ = rand.NormFloat64()
 	}
 	for i := 0; i < len(vec); i++ {
-		vec[i] = rand.NormFloat64()*std + mean
+		if sparsity == 0 || rand.Intn(100) >= sparsity {
+			vec[i] = rand.NormFloat64()*std + mean
+		} else {
+			vec[i] = mean
+		}
 	}
 }
 
