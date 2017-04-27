@@ -14,12 +14,13 @@ type Initiator struct {
 	nn_cpy  *NeuNetwork
 	reptvec []*Target
 	// selected target, its estimated latency, and a copy of (delayed) history
-	target  *Target
-	minlat  float64
-	distory []float64 // [[selectcnt / ni]]
-	gnoise  [][][][]float64
-	score   int
-	id      int
+	target    *Target
+	minlat    float64
+	distory   []float64 // [[selectcnt / ni]]
+	gnoise    [][][][]float64
+	score     int
+	id        int
+	genjitter bool
 }
 
 type Target struct {
@@ -41,7 +42,9 @@ type RCLR struct {
 	wg                     *sync.WaitGroup
 	mstart                 *sync.RWMutex
 	mend                   *sync.RWMutex
-	sigma, alpha, epsilon  float64 // gaussian sigma, learning rate, a very small value (evolution only)
+	sigma                  float64 // sigma aka std
+	rewardelta             float64 // reward delta
+	momentum               float64 // momentum
 	highreward, hialpha    float64 // high(er) reward threshold and the corresponding learning rate (evolution only)
 	svcrate                float64 // service rate
 	scorelow, scorehigh    float64 // scoring thresholds that control inter-initiator weights exchange
@@ -53,9 +56,13 @@ type RCLR struct {
 	sparsity               int     // jitter sparsity: percentage of the weights that get jittered = 100 - sparsity
 	batchsize, numhid      int     // NN batchsize, NN number of hidden layers
 	gdalg                  string  // NN gradient descent algorithm
-	useGD                  bool    // whether to /evolve/ or use GD
-	repeatevo              bool    // whether to reuse a given mini-batch to /evolve/ once more
-	fnlatency              func(h []float64) float64
+	// flags
+	useGD       bool // evolution or else (GD)
+	repeatevo   bool // reuse a given mini-batch to /evolve/ one more time
+	usemomentum bool // apply the previous update * momentum
+	reusenoise  bool // reshuffle (and reuse) previously generated noise
+	//
+	fnlatency func(h []float64) float64
 }
 
 func init() {
@@ -63,11 +70,13 @@ func init() {
 		&sync.WaitGroup{},
 		&sync.RWMutex{},
 		&sync.RWMutex{},
-		0.1, 0.001, 0.001, // gaussian sigma, learning rate, epsilon (evolution only)
+		0.5,       //         gaussian sigma
+		0.001,     //         rewardelta
+		0.01,      //         momentum (evolution)
 		0.9, 0.01, //         high(er) reward threshold and the corresponding learning rate (evolution only)
 		1.1,         //       service rate: num requests target can handle during one epoch step
 		1000.1, 1.3, //       low(TODO) and high scoring thresholds, to control inter-initiator weight exchange
-		10, 10, 5000, 3, //   numbers of initiators and targets, max num of steps, number of replicas
+		10, 10, 5000, 3, //   numbers of initiators and targets, num steps, number of replicas
 		30,          //       target history size - selection counts that each target keeps back in time
 		100,         //       colaboration = scoring period: number of steps (epochs)
 		0,           //       (0, 1) => initiator and target see the same exact history
@@ -75,8 +84,12 @@ func init() {
 		32,          //       half the number of the NN weight /perturbations/ (evolution only)
 		0,           //       jitter sparsity
 		10, 2, ADAM, //       NN: batchsize, number of hidden layers, GD optimization algorithm
-		false,       //       true - use GD, false - run evolution
-		true,        //       repeat evolution
+		// flags
+		false, // true - use GD, false - run evolution
+		true,  // repeat: re-evolve using the same mini-batch
+		true,  // use momentum
+		false, // reshuffle (and reuse) previously generated noise
+		//
 		fn4_latency, //       the latency function
 	}
 	ivec = make([]*Initiator, rclr.ni)
@@ -116,6 +129,8 @@ func Test_rcluster(t *testing.T) {
 		rclr.wg.Add(rclr.ni)
 		rclr.mend.Unlock()
 
+		rejitter_I(step)
+
 		// inter-initiator weights exchange & printouts
 		if step%rclr.coperiod == 0 {
 			collab_I() // I: try to make use of the NN(s) with better results
@@ -135,6 +150,8 @@ func Test_rcluster(t *testing.T) {
 			// fmt.Printf("C: %.3f\n", C)
 			fmt.Printf("%3d: %.3f\n", step/rclr.coperiod, S)
 			// fmt.Printf("L: %.3f\n\n", L)
+
+			rclr.rewardelta *= 2 // FIXME
 		}
 	}
 }
@@ -147,7 +164,7 @@ func construct_T() {
 
 func construct_I() {
 	for i, _ := range ivec {
-		// some function
+		// multilayer NN is good to approximate about anything
 		input := NeuLayerConfig{size: rclr.hisize}
 		hidden := NeuLayerConfig{"sigmoid", input.size * 2}
 		output := NeuLayerConfig{"identity", 1}
@@ -158,11 +175,12 @@ func construct_I() {
 		nn_cpy.copyNetwork(nn)
 
 		initiator := &Initiator{
-			nn:      nn,
-			nn_cpy:  nn_cpy,
-			reptvec: make([]*Target, rclr.copies),
-			distory: newVector(rclr.hisize),
-			id:      i}
+			nn:        nn,
+			nn_cpy:    nn_cpy,
+			reptvec:   make([]*Target, rclr.copies),
+			distory:   newVector(rclr.hisize),
+			id:        i,
+			genjitter: true}
 
 		if !rclr.useGD {
 			initiator.gnoise = make([][][][]float64, rclr.numhid+1)
@@ -192,7 +210,7 @@ func compute_I() {
 			initiator.reptvec[i] = tvec[rand.Intn(rclr.nt)]
 		}
 
-		// estimate respective latencies, select T min
+		// estimate the respective latencies, select T min
 		initiator.target = nil
 		for i := 0; i < rclr.copies; i++ {
 			xvec := initiator.reptvec[i].history[rclr.idelay : rclr.idelay+rclr.hisize]
@@ -233,12 +251,43 @@ OUTER:
 			if target == initiator.target {
 				continue
 			}
-			// NOTE: > ... + fmin(rclr.epsilon, target.currlat/1000)
+			// NOTE: > ... + fmin(epsilon, target.currlat/1000)
 			if initiator.target.currlat > target.currlat {
 				continue OUTER
 			}
 		}
 		initiator.score++
+	}
+}
+
+// reshuffle "jitters" to speed-up evolution
+func rejitter_I(step int) {
+	if !rclr.reusenoise || step%(rclr.ni-2) == 0 {
+		for _, initiator := range ivec {
+			initiator.genjitter = true
+		}
+		return
+	}
+	for _, initiator := range ivec {
+		for l := 0; l < initiator.nn.lastidx; l++ {
+			noisycube := initiator.gnoise[l]
+			for jj := 0; jj < rclr.nperturb*2; jj++ {
+				for r := 0; r < len(noisycube[jj]); r++ {
+					row := noisycube[jj][r]
+					a := row[0]
+					copy(row[1:], row)
+					row[len(row)-1] = a
+					if len(row) > 3 {
+						m := len(row) / 2
+						for j := 1; j < m; j++ {
+							a := row[m-j]
+							row[m-j] = row[m+j]
+							row[m+j] = a
+						}
+					}
+				}
+			}
+		}
 	}
 }
 
@@ -290,6 +339,12 @@ func (initiator *Initiator) evolve() {
 		layer := nn.layers[l]
 		divMatrixNum(layer.gradient, float64(nn.tunables.batchsize))
 		addMatrixElem(layer.weights, layer.gradient)
+
+		if rclr.usemomentum {
+			mulMatrixNum(layer.pregradient, rclr.momentum)
+			addMatrixElem(layer.weights, layer.pregradient)
+			copyMatrix(layer.pregradient, layer.gradient)
+		}
 		zeroMatrix(layer.gradient)
 	}
 }
@@ -300,9 +355,9 @@ func (initiator *Initiator) accumulateUpdates(xvec []float64, y float64, l int, 
 	copyMatrix(layer_cpy.weights, layer.weights)
 
 	// generate random normal jitter for the layer l weights
-	// when repeating, simply recompute rewards for the previously generated jitter..
+	// but only if the corresponding flag is on (otherwise we'd spend most of the local CPU time inside rand..)
 	noisycube := initiator.gnoise[l]
-	if !repeating {
+	if !repeating && initiator.genjitter {
 		for jj, j := 0, 0; j < rclr.nperturb; j++ {
 			fillMatrixNormal(noisycube[jj], 0.0, 1.0, initiator.id, rclr.sparsity)
 			mulMatrixNum(noisycube[jj], rclr.sigma)
@@ -310,6 +365,7 @@ func (initiator *Initiator) accumulateUpdates(xvec []float64, y float64, l int, 
 			mulMatrixNum(noisycube[jj+1], -1.0)
 			jj += 2
 		}
+		initiator.genjitter = false
 	}
 	//
 	// estimate the rewards for all 2*nperturb perturbations
@@ -334,18 +390,18 @@ func (initiator *Initiator) accumulateUpdates(xvec []float64, y float64, l int, 
 	//
 	standardizeVectorZscore(rewards)
 	for jj, j := 0, 0; j < rclr.nperturb; j++ {
-		if rewards[jj] > rewards[jj+1]+rclr.epsilon {
+		if rewards[jj] > rewards[jj+1]+rclr.rewardelta {
 			if rewards[jj] > rclr.highreward {
 				mulMatrixNum(noisycube[jj], rclr.hialpha*rewards[jj])
 			} else {
-				mulMatrixNum(noisycube[jj], rclr.alpha*rewards[jj])
+				mulMatrixNum(noisycube[jj], initiator.nn.tunables.alpha*rewards[jj])
 			}
 			addMatrixElem(layer.gradient, noisycube[jj])
-		} else if rewards[jj+1] > rewards[jj]+rclr.epsilon {
+		} else if rewards[jj+1] > rewards[jj]+rclr.rewardelta {
 			if rewards[jj+1] > rclr.highreward {
 				mulMatrixNum(noisycube[jj+1], rclr.hialpha*rewards[jj+1])
 			} else {
-				mulMatrixNum(noisycube[jj+1], rclr.alpha*rewards[jj+1])
+				mulMatrixNum(noisycube[jj+1], initiator.nn.tunables.alpha*rewards[jj+1])
 			}
 			addMatrixElem(layer.gradient, noisycube[jj+1])
 		}
@@ -442,7 +498,7 @@ func fn0_latency(h []float64) (lat float64) {
 
 func fn1_latency(h []float64) (cv float64) {
 	mean, std := meanStdVector(h)
-	cv = std / (mean + rclr.epsilon)
+	cv = std / (mean + DEFAULT_eps)
 	return
 }
 
