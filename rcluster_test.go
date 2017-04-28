@@ -14,13 +14,12 @@ type Initiator struct {
 	nn_cpy  *NeuNetwork
 	reptvec []*Target
 	// selected target, its estimated latency, and a copy of (delayed) history
-	target    *Target
-	minlat    float64
-	distory   []float64 // [[selectcnt / ni]]
-	gnoise    [][][][]float64
-	score     int
-	id        int
-	genjitter bool
+	target  *Target
+	minlat  float64
+	distory []float64 // [[selectcnt / ni]]
+	gnoise  [][][][]float64
+	score   int
+	id      int
 }
 
 type Target struct {
@@ -52,15 +51,15 @@ type RCLR struct {
 	hisize                 int     // target (selection) history size
 	coperiod               int     // colaboration = scoring period: number of steps (epochs)
 	idelay, tdelay         int     // initiator and target "delay" as far as the history of the target /selections/
-	nperturb               int     // half the number of the NN weight /perturbations/ (evolution only)
-	sparsity               int     // jitter sparsity: percentage of the weights that get jittered = 100 - sparsity
+	nperturb               int     // half the number of the NN weight perturbations aka jitters (evolution only)
+	sparsity               int     // jitter sparsity: % weights that get jittered = 100 - sparsity
+	inflate, res1          int     // inflate an already generated guassian noise by reshuffling it so many times
 	batchsize, numhid      int     // NN batchsize, NN number of hidden layers
 	gdalg                  string  // NN gradient descent algorithm
 	// flags
 	useGD       bool // evolution or else (GD)
 	repeatevo   bool // reuse a given mini-batch to /evolve/ one more time
 	usemomentum bool // apply the previous update * momentum
-	reusenoise  bool // reshuffle (and reuse) previously generated noise
 	//
 	fnlatency func(h []float64) float64
 }
@@ -70,27 +69,27 @@ func init() {
 		&sync.WaitGroup{},
 		&sync.RWMutex{},
 		&sync.RWMutex{},
-		0.5,       //         gaussian sigma
-		0.001,     //         rewardelta
-		0.01,      //         momentum (evolution)
-		0.9, 0.01, //         high(er) reward threshold and the corresponding learning rate (evolution only)
-		1.1,         //       service rate: num requests target can handle during one epoch step
-		1000.1, 1.3, //       low(TODO) and high scoring thresholds, to control inter-initiator weight exchange
+		0.5,       // 	gaussian sigma
+		0.001,     //	rewardelta
+		0.01,      //	momentum (evolution)
+		0.9, 0.01, //	high(er) reward threshold and the corresponding learning rate (evolution only)
+		1.1,         //	service rate: num requests target can handle during one epoch step
+		1000.1, 1.3, //	low(TODO) and high scoring thresholds, to control inter-initiator weight exchange
 		10, 10, 5000, 3, //   numbers of initiators and targets, num steps, number of replicas
-		30,          //       target history size - selection counts that each target keeps back in time
-		100,         //       colaboration = scoring period: number of steps (epochs)
-		0,           //       (0, 1) => initiator and target see the same exact history
-		1,           //       (1, 0) => initiator's history is two epochs older than the target's
-		32,          //       half the number of the NN weight /perturbations/ (evolution only)
-		0,           //       jitter sparsity
-		10, 2, ADAM, //       NN: batchsize, number of hidden layers, GD optimization algorithm
+		30,    // 	target history size - selection counts that each target keeps back in time
+		100,   //       colaboration = scoring period: number of steps (epochs)
+		0,     //       (0, 1) => initiator and target see the same exact history
+		1,     //       (1, 0) => initiator's history is two epochs older than the target's
+		40,    //       half the number of the NN weight perturbations aka jitters (evolution only)
+		10,    //       noise matrix sparsity (%)
+		2, -1, //       gaussian noise "inflation" ratio, to speed up evolution
+		10, 2, ADAM, //	NN: batchsize, number of hidden layers, GD optimization algorithm
 		// flags
-		false, // true - use GD, false - run evolution
-		true,  // repeat: re-evolve using the same mini-batch
-		true,  // use momentum
-		false, // reshuffle (and reuse) previously generated noise
+		false, // 	true - use GD, false - run evolution
+		true,  // 	repeat: re-evolve using the same mini-batch
+		true,  // 	use momentum
 		//
-		fn4_latency, //       the latency function
+		fn4_latency, //	the latency function
 	}
 	ivec = make([]*Initiator, rclr.ni)
 	tvec = make([]*Target, rclr.nt)
@@ -128,8 +127,6 @@ func Test_rcluster(t *testing.T) {
 		rclr.mstart.Lock()
 		rclr.wg.Add(rclr.ni)
 		rclr.mend.Unlock()
-
-		rejitter_I(step)
 
 		// inter-initiator weights exchange & printouts
 		if step%rclr.coperiod == 0 {
@@ -175,12 +172,11 @@ func construct_I() {
 		nn_cpy.copyNetwork(nn)
 
 		initiator := &Initiator{
-			nn:        nn,
-			nn_cpy:    nn_cpy,
-			reptvec:   make([]*Target, rclr.copies),
-			distory:   newVector(rclr.hisize),
-			id:        i,
-			genjitter: true}
+			nn:      nn,
+			nn_cpy:  nn_cpy,
+			reptvec: make([]*Target, rclr.copies),
+			distory: newVector(rclr.hisize),
+			id:      i}
 
 		if !rclr.useGD {
 			initiator.gnoise = make([][][][]float64, rclr.numhid+1)
@@ -260,37 +256,6 @@ OUTER:
 	}
 }
 
-// reshuffle "jitters" to speed-up evolution
-func rejitter_I(step int) {
-	if !rclr.reusenoise || step%(rclr.ni-2) == 0 {
-		for _, initiator := range ivec {
-			initiator.genjitter = true
-		}
-		return
-	}
-	for _, initiator := range ivec {
-		for l := 0; l < initiator.nn.lastidx; l++ {
-			noisycube := initiator.gnoise[l]
-			for jj := 0; jj < rclr.nperturb*2; jj++ {
-				for r := 0; r < len(noisycube[jj]); r++ {
-					row := noisycube[jj][r]
-					a := row[0]
-					copy(row[1:], row)
-					row[len(row)-1] = a
-					if len(row) > 3 {
-						m := len(row) / 2
-						for j := 1; j < m; j++ {
-							a := row[m-j]
-							row[m-j] = row[m+j]
-							row[m+j] = a
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
 // one mini-batch at a time (similar to gradientDescent)
 func (initiator *Initiator) evolution() {
 	b := initiator.nn.tunables.batchsize
@@ -353,19 +318,32 @@ func (initiator *Initiator) evolve() {
 func (initiator *Initiator) accumulateUpdates(xvec []float64, y float64, l int, rewards []float64, repeating bool) {
 	layer, layer_cpy := initiator.nn.layers[l], initiator.nn_cpy.layers[l]
 	copyMatrix(layer_cpy.weights, layer.weights)
-
+	cols := layer.next.size
 	// generate random normal jitter for the layer l weights
 	// but only if the corresponding flag is on (otherwise we'd spend most of the local CPU time inside rand..)
 	noisycube := initiator.gnoise[l]
-	if !repeating && initiator.genjitter {
-		for jj, j := 0, 0; j < rclr.nperturb; j++ {
+	if !repeating {
+		for jj, j := 0, 0; j < rclr.nperturb; {
 			fillMatrixNormal(noisycube[jj], 0.0, 1.0, initiator.id, rclr.sparsity)
 			mulMatrixNum(noisycube[jj], rclr.sigma)
 			copyMatrix(noisycube[jj+1], noisycube[jj])
 			mulMatrixNum(noisycube[jj+1], -1.0)
+			mat := noisycube[jj]
+			j++
 			jj += 2
+			if cols < 4 || cols < rclr.inflate {
+				continue
+			}
+			// inflate the jitter - fast
+			for i := 0; i < rclr.inflate-1 && j < rclr.nperturb; i++ {
+				reshuffleMatrix(noisycube[jj], mat)
+				copyMatrix(noisycube[jj+1], noisycube[jj])
+				mulMatrixNum(noisycube[jj+1], -1.0)
+				mat = noisycube[jj+1]
+				j++
+				jj += 2
+			}
 		}
-		initiator.genjitter = false
 	}
 	//
 	// estimate the rewards for all 2*nperturb perturbations
@@ -457,10 +435,7 @@ func collab_I() {
 			topidx = i
 		}
 	}
-	// copy the winner
 	first := ivec[topidx]
-
-	// copy the winner
 	for i, initiator := range ivec {
 		if i == topidx {
 			continue
@@ -471,6 +446,16 @@ func collab_I() {
 			fmt.Printf("%d(%.3f) --> %d(%.3f)\n", topidx, w1, i, w2)
 			initiator.nn.reset()
 			initiator.nn.copyNetwork(first.nn)
+			/* alternatively: NN = winner-NN * w1 + NN * w2
+			copyStruct(nn.tunables, first.nn.tunables)
+			for l := 0; l < nn.lastidx; l++ {
+				layer := nn.layers[l]
+				mulMatrixNum(layer.weights, nn.tunables.alpha)
+
+				layer_first := first.nn.layers[l]
+				addMatrixElem(layer.weights, layer_first.weights)
+			}
+			*/
 		}
 	}
 }
