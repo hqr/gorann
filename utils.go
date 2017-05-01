@@ -62,17 +62,21 @@ func addMatrixElem(dst [][]float64, src [][]float64) {
 func zeroMatrix(mat [][]float64) {
 	rows := len(mat)
 	for r := 0; r < rows; r++ {
-		fillVector(mat[r], 0)
+		fillVector(mat[r], 0.0)
 	}
 }
 
-func fillMatrixNormal(mat [][]float64, mean, std float64, skip int, sparsity int) {
+func fillMatrixNormal(mat [][]float64, mean, std float64, sparsity int, newrand *rand.Rand) {
 	rows := len(mat)
-	for i := 0; i < skip; i++ {
-		_ = rand.NormFloat64()
-	}
+	cols := len(mat[0])
 	for r := 0; r < rows; r++ {
-		fillVectorNormal(mat[r], mean, std, sparsity)
+		for c := 0; c < cols; c++ {
+			if sparsity == 0 || newrand.Intn(100) >= sparsity {
+				mat[r][c] = newrand.NormFloat64()*std + mean
+			} else {
+				mat[r][c] = mean
+			}
+		}
 	}
 }
 
@@ -278,18 +282,21 @@ func subVectorElemAbs(dst []float64, src []float64) {
 
 func newVector(size int, args ...interface{}) []float64 {
 	v := make([]float64, size)
-	if len(args) == 0 {
-		return v
-	}
-	if len(args) == 1 {
+	fillVector(v, args...)
+	return v
+}
+
+func fillVector(v []float64, args ...interface{}) {
+	size := len(v)
+	switch len(args) {
+	case 0:
+		// do nothing
+	case 1:
 		f := args[0].(float64)
 		for i := 0; i < size; i++ {
 			v[i] = f
 		}
-		return v
-	}
-	// fill in with random values between spec-ed boundaries
-	if len(args) == 2 {
+	case 2: // random uniformly distributed [left, right] values from the default source
 		left := args[0].(float64)
 		right := args[1].(float64)
 		assert(right > left)
@@ -297,33 +304,36 @@ func newVector(size int, args ...interface{}) []float64 {
 		for i := 0; i < size; i++ {
 			v[i] = d*rand.Float64() + left
 		}
-		return v
-	}
-
-	assert(len(args) == 3)
-	dist := args[2].(string)
-	assert(dist == "normal")
-	mean := args[0].(float64)
-	std := args[1].(float64)
-	for i := 0; i < size; i++ {
-		v[i] = rand.NormFloat64()*std + mean
-	}
-	return v
-}
-
-func fillVector(vec []float64, x float64) {
-	for i := 0; i < len(vec); i++ {
-		vec[i] = x
-	}
-}
-
-func fillVectorNormal(vec []float64, mean, std float64, sparsity int) {
-	for i := 0; i < len(vec); i++ {
-		if sparsity == 0 || rand.Intn(100) >= sparsity {
-			vec[i] = rand.NormFloat64()*std + mean
-		} else {
-			vec[i] = mean
+	case 3: // random normally distributed (mean, std) from the default source
+		dist := args[2].(string)
+		assert(dist == "normal")
+		mean := args[0].(float64)
+		std := args[1].(float64)
+		for i := 0; i < size; i++ {
+			v[i] = rand.NormFloat64()*std + mean
 		}
+	case 4: // random from the specified source
+		newrand := args[3].(*rand.Rand)
+		dist := args[2].(string)
+		if dist == "normal" { // from normal distribution (mean, std)
+			mean := args[0].(float64)
+			std := args[1].(float64)
+			for i := 0; i < size; i++ {
+				v[i] = newrand.NormFloat64()*std + mean
+			}
+		} else {
+			assert(dist == "") // uniformly distributed
+			left := args[0].(float64)
+			right := args[1].(float64)
+			assert(right > left)
+			d := right - left
+			for i := 0; i < size; i++ {
+				v[i] = d*newrand.Float64() + left
+			}
+		}
+
+	default:
+		assert(false)
 	}
 }
 

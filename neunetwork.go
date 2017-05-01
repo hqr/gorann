@@ -102,7 +102,7 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 		layer.init(nn)
 	}
 	if nn.tunables.winit == Xavier {
-		nn.initXavier()
+		nn.initXavier(nil)
 	}
 	// other useful tunables
 	// nn.tunables.gdalgscopeall = true
@@ -202,10 +202,12 @@ func (layer *NeuLayer) init(nn *NeuNetwork) {
 	}
 }
 
+// allocate and switch(winit)
 func (layer *NeuLayer) winit(tunables *NeuTunables) {
 	next := layer.next
-	layer.weights = newMatrix(layer.size, next.size, -1.0, 1.0)
-	if tunables.winit == Random_1105 {
+	switch tunables.winit {
+	case Random_1105: // default
+		layer.weights = newMatrix(layer.size, next.size, -1.0, 1.0)
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
 				if layer.weights[i][j] >= 0 && layer.weights[i][j] < 0.5 {
@@ -215,13 +217,15 @@ func (layer *NeuLayer) winit(tunables *NeuTunables) {
 				}
 			}
 		}
+	case Random_11:
+		layer.weights = newMatrix(layer.size, next.size, -1.0, 1.0)
+	default:
+		layer.weights = newMatrix(layer.size, next.size)
 	}
-
-	// Xavier et al at http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
 }
 
 // Xavier et al at http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
-func (nn *NeuNetwork) initXavier() {
+func (nn *NeuNetwork) initXavier(newrand *rand.Rand) {
 	qsix := math.Sqrt(6)
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
@@ -230,7 +234,11 @@ func (nn *NeuNetwork) initXavier() {
 		d := u * 2
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
-				layer.weights[i][j] = d*rand.Float64() - u
+				if newrand == nil {
+					layer.weights[i][j] = d*rand.Float64() - u
+				} else {
+					layer.weights[i][j] = d*newrand.Float64() - u
+				}
 			}
 		}
 	}
@@ -241,8 +249,8 @@ func (nn *NeuNetwork) reset() {
 	gdalgname := nn.tunables.gdalgname
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
-		fillVector(layer.avec, 0)
-		fillVector(layer.zvec, 0)
+		fillVector(layer.avec, 0.0)
+		fillVector(layer.zvec, 0.0)
 		if layer.size > layer.config.size {
 			layer.avec[layer.config.size] = 1
 		}
