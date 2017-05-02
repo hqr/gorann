@@ -1,7 +1,6 @@
 package gorann
 
 import (
-	"math"
 	"math/rand"
 )
 
@@ -70,7 +69,7 @@ func NewEvolution(
 func (evo *Evolution) computeDeltas(yvec []float64) []float64 {
 	assert(len(yvec) == evo.coutput.size)
 	olayer := evo.layers[evo.lastidx]
-	copyVector(olayer.deltas, yvec)
+	copyVector(olayer.deltas, yvec) // FIXME: find a better (named) place
 	return yvec
 }
 
@@ -112,26 +111,24 @@ func (evo *Evolution) backpropGradients() {
 	l := evo.l % evo.lastidx
 
 	olayer := evo.layers[evo.lastidx]
-	y := olayer.deltas[0] // FIXME
-
 	layer, layer_cpy := evo.NeuNetwork.layers[l], evo.nn_cpy.layers[l]
 	copyMatrix(layer_cpy.weights, layer.weights)
 
 	noisycube := evo.gnoise[l]
 	//
-	// estimate the rewards for all 2*nperturb perturbations
+	// estimate the rewards (== -cost) for all "positive" and "negative" perturbations
 	//
 	for jj, j := 0, 0; j < evo.tunables.nperturb; j++ {
 		addMatrixElem(layer.weights, noisycube[jj])
-		avec := evo.reForward()
-		evo.rewards[jj] = -math.Pow(avec[0]-y, 2)
+		evo.reForward()
+		evo.rewards[jj] = -evo.costfunction(olayer.deltas)
 		copyMatrix(layer.weights, layer_cpy.weights)
 		//
 		// and again, this time with a "negative" noise
 		//
 		addMatrixElem(layer.weights, noisycube[jj+1])
-		avec = evo.reForward()
-		evo.rewards[jj+1] = -math.Pow(avec[0]-y, 2)
+		evo.reForward()
+		evo.rewards[jj+1] = -evo.costfunction(olayer.deltas)
 		copyMatrix(layer.weights, layer_cpy.weights)
 		jj += 2
 	}

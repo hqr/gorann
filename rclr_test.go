@@ -5,8 +5,9 @@ package gorann
 //
 import (
 	"fmt"
-	"math"
+	"github.com/gonum/stat"
 	"math/rand"
+	"sort"
 	"sync"
 	"testing"
 )
@@ -17,11 +18,12 @@ type Initiator struct {
 	// cluster
 	reptvec []*Target
 	// selected target, its estimated latency, and a copy of (delayed) history
-	target  *Target
-	minlat  float64
-	distory []float64 // [[selectcnt / ni]]
-	score   int
-	id      int
+	target   *Target
+	minlat   float64
+	distory  []float64 // [[selectcnt / ni]]
+	scoreLat int
+	scoreSel int
+	id       int
 }
 
 type Target struct {
@@ -31,8 +33,10 @@ type Target struct {
 	id        int
 }
 
+type ByLatency []*Initiator // implements sort.Interface
+
 // static
-var ivec []*Initiator
+var ivec, ivecsorted []*Initiator
 var tvec []*Target
 var rclr *RCLR
 
@@ -46,6 +50,8 @@ type RCLR struct {
 	step      int
 	res1      int
 	//
+	// cluster-wide tunables
+	//
 	svcrate                float64 // service rate
 	scorehigh              float64 // scoring thresholds that control inter-initiator weights exchange
 	ni, nt, nsteps, copies int     // numbers of initiators and targets, number of steps (epochs), number of replicas
@@ -53,9 +59,7 @@ type RCLR struct {
 	coperiod               int     // colaboration = scoring period: number of steps (epochs)
 	idelay, tdelay         int     // initiator and target "delay" as far as the history of the target /selections/
 	//
-	// FIXME: move the flags elsewhere
-	repeatmini bool // "revolve" one more time on a given mini-batch
-	useGD      bool // true - descend, false - evolve
+	useGD bool // true - descend, false - evolve
 	//
 	fnlatency func(h []float64) float64
 }
@@ -65,18 +69,21 @@ func init() {
 		&sync.WaitGroup{},
 		&sync.Mutex{},
 		nil, 0, -1,
+		//
+		// cluster-wide tunables
+		//
 		1.1,            // service rate: num requests target can handle during one epoch step
 		1.3,            // high scoring thresholds, to control inter-initiator weight exchange
 		10, 10, 1E4, 3, // numbers of initiators and targets, num steps, replicas
 		30,          //	target history size - selection counts that each target keeps back in time
 		100,         // colaboration = scoring period: number of steps (epochs)
-		0,           // (0, 1) => initiator and target see the same exact history
-		1,           // (1, 0) => initiator's history is two epochs older than the target's
-		false,       // re-evolve post weight-update, use the same mini-batch
+		1,           // initiator "sees" the history delayed by so many epochs
+		0,           // target owns the presense
 		false,       // true - descend, false - evolve
 		fn4_latency, //
 	}
 	ivec = make([]*Initiator, rclr.ni)
+	ivecsorted = make([]*Initiator, rclr.ni)
 	tvec = make([]*Target, rclr.nt)
 }
 
@@ -106,32 +113,31 @@ func Test_rcluster(t *testing.T) {
 		if rclr.step > rclr.nsteps {
 			break
 		}
-		compute_I() // I: select 3 rep-holding Ts, compute latencies based on (delayed) uvecs, select the T min
-		compute_T() // T: given the selections (see prev step), compute "true" latencies and append to the uvecs
-		score_I()   // I: +1 if selected the fastest target out of 3
+		compute_I() // I: select 3 rep-holding Ts, compute latencies, select the NN-estimated min
+		compute_T() // T: given target selections, compute true latencies
+		score_I()   // I: score based on the sorted order, by initiator latency
 
-		// synchronization block
-		// fmt.Printf("========= %d =========\n", step)
+		// synchronize with the (I) workers
 		rclr.step++
 		rclr.nextround.Unlock()
 		rclr.cond.Broadcast()
-		rclr.wg.Wait()
+		rclr.wg.Wait() // ===================>>> revolution | gradientDescent
 		rclr.nextround.Lock()
 		rclr.wg.Add(rclr.ni)
 
-		// inter-initiator weights exchange & printouts
+		// inter-initiator collaboration
 		if rclr.step%rclr.coperiod == 0 {
-			collab_I() // I: try to make use of the NN(s) with better results
+			collab_I() // make use of clustered NN(s) that produced /better/ results
 
-			C, S := newVector(rclr.ni), newVector(rclr.ni)
+			scLat, scSel := newVector(rclr.ni), newVector(rclr.ni)
 			for i, initiator := range ivec {
-				C[i] = math.Pow(initiator.minlat-initiator.target.currlat, 2)
-				S[i] = float64(initiator.score) / float64(rclr.coperiod)
-
-				// zero-out the scores for the next coperiod
-				initiator.score = 0
+				scLat[i] = float64(initiator.scoreLat) / float64(rclr.coperiod*rclr.ni)
+				scSel[i] = float64(initiator.scoreSel) / float64(rclr.coperiod)
+				initiator.scoreLat, initiator.scoreSel = 0, 0
 			}
-			fmt.Printf("%3d: %.3f\n", rclr.step/rclr.coperiod, S)
+			fmt.Printf("%3d: %.3f\n", rclr.step/rclr.coperiod, scLat)
+			fmt.Printf("%3d: %.3f\n", rclr.step/rclr.coperiod, scSel)
+			fmt.Printf("%3d: %.3f\n", rclr.step/rclr.coperiod, stat.Correlation(scLat, scSel, nil))
 		}
 	}
 }
@@ -174,6 +180,7 @@ func compute_I() {
 	for _, target := range tvec {
 		target.selectcnt = 0
 	}
+	xvec := newVector(rclr.hisize)
 	for _, initiator := range ivec {
 		newrand := initiator.evo.newrand
 		// 3 targets holding the replica that we want to read
@@ -183,9 +190,15 @@ func compute_I() {
 		// estimate the respective latencies, and select
 		initiator.target = nil
 		for i := 0; i < rclr.copies; i++ {
-			xvec := initiator.reptvec[i].history[rclr.idelay : rclr.idelay+rclr.hisize]
-			assert(len(xvec) == rclr.hisize)
-			avec := initiator.evo.Predict(xvec)
+			// this target selection history, delayed and shifted one epoch back
+			copy(xvec[1:], initiator.reptvec[i].history[rclr.idelay:rclr.idelay+rclr.hisize])
+
+			// as far as the presense, let's assume I'll select this target
+			// and will be the only one having it...
+			xvec[0] += 1.0 / float64(rclr.ni)
+
+			// use NN to predict
+			avec := initiator.evo.Predict(initiator.distory)
 			if initiator.target == nil || initiator.minlat > avec[0] {
 				initiator.minlat = avec[0]
 				initiator.target = initiator.reptvec[i]
@@ -214,19 +227,35 @@ func compute_T() {
 	}
 }
 
+//========
+//
+// sorting and scoring
+//
+//========
+func (ivec ByLatency) Len() int           { return len(ivec) }
+func (ivec ByLatency) Swap(i, j int)      { ivec[i], ivec[j] = ivec[j], ivec[i] }
+func (ivec ByLatency) Less(i, j int) bool { return ivec[i].target.currlat < ivec[j].target.currlat }
+
+// initiators compete between themselves
 func score_I() {
+	copy(ivecsorted, ivec)
+	sort.Sort(ByLatency(ivecsorted))
+
+	for i, initiator := range ivecsorted {
+		initiator.scoreLat += rclr.ni - i
+	}
+
 OUTER:
 	for _, initiator := range ivec {
 		for _, target := range initiator.reptvec {
 			if target == initiator.target {
 				continue
 			}
-			// NOTE: > ... + fmin(epsilon, target.currlat/1000)
 			if initiator.target.currlat > target.currlat {
 				continue OUTER
 			}
 		}
-		initiator.score++
+		initiator.scoreSel++
 	}
 }
 
@@ -258,12 +287,6 @@ func (initiator *Initiator) revolution() {
 		i++
 		if i == b {
 			initiator.evo.fixWeights(b)
-			if rclr.repeatmini {
-				for ii := 0; ii < b; ii++ {
-					initiator.evo.TrainStep(Xs[ii], Ys[ii])
-				}
-				initiator.evo.fixWeights(b)
-			}
 			i = 0
 		}
 		step++
@@ -308,8 +331,8 @@ func (initiator *Initiator) gradientDescent() {
 func collab_I() {
 	topscore, topidx := -1, -1
 	for i, initiator := range ivec {
-		if initiator.score >= topscore {
-			topscore = initiator.score
+		if initiator.scoreLat >= topscore {
+			topscore = initiator.scoreLat
 			topidx = i
 		}
 	}
@@ -318,8 +341,8 @@ func collab_I() {
 		if i == topidx {
 			continue
 		}
-		w1 := float64(topscore) / float64(topscore+initiator.score)
-		w2 := float64(initiator.score) / float64(topscore+initiator.score)
+		w1 := float64(topscore) / float64(topscore+initiator.scoreLat)
+		w2 := float64(initiator.scoreLat) / float64(topscore+initiator.scoreLat)
 		if w1 > w2*rclr.scorehigh {
 			fmt.Printf("%d(%.3f) --> %d(%.3f)\n", topidx, w1, i, w2)
 			nn := &initiator.evo.NeuNetwork
@@ -337,12 +360,12 @@ func collab_I() {
 //==================================================================
 func fn0_latency(h []float64) (lat float64) {
 	lat = h[0]
-	for i := 1; i < len(h); i++ {
-		if h[i] == 0 && h[i-1] == 0 {
+	for i := 2; i < len(h); i++ {
+		if h[i] == 0 && h[i-1] == 0 && h[i-2] == 0 {
 			break
 		}
-		if h[i] > 0 && h[i-1] > 0 {
-			lat += lat * h[i] * 2
+		if h[i] > 0 && h[i-1] > 0 && h[i-2] > 0 {
+			lat += lat * h[i] * 4
 		} else {
 			lat += lat * h[i]
 		}
@@ -361,16 +384,14 @@ func fn3_latency(h []float64) (lat float64) {
 	lat = meanVector(h)
 	// To be precise, we'd need to convert average num of arrivals
 	// (reads in this case) to the time units that measure latency.
-	// But since this conversion is linear and fixed for the model,
-	// we can simply return the historical mean
+	// But since this conversion is linear and fixed for the model...
 	//
 	return
 }
 
-// constant processing time == leaky bucket:
+// constant processing time, as in: leaky bucket
 // max(total-num-requests - num-requests-can-handle-in-so-many-steps), 0) + time-to-handle-the-last-one
-// NOTE:
-// non-linear factors such as burstiness and/or high utilization are disregarded
+// non-linear factors such as burstiness and high utilization are disregarded
 func fn4_latency(h []float64) (lat float64) {
 	var reqs float64
 	for i := len(h) - 1; i > 0; i-- {
