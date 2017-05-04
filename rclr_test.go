@@ -6,6 +6,7 @@ package gorann
 import (
 	"fmt"
 	"github.com/gonum/stat"
+	"math"
 	"math/rand"
 	"sort"
 	"sync"
@@ -21,6 +22,7 @@ type Initiator struct {
 	target   *Target
 	minlat   float64
 	distory  []float64 // [[selectcnt / ni]]
+	avgcost  float64
 	scoreLat int
 	scoreSel int
 	id       int
@@ -56,7 +58,7 @@ type RCLR struct {
 	scorehigh              float64 // scoring thresholds that control inter-initiator weights exchange
 	ni, nt, nsteps, copies int     // numbers of initiators and targets, number of steps (epochs), number of replicas
 	hisize                 int     // target (selection) history size
-	coperiod               int     // colaboration = scoring period: number of steps (epochs)
+	coperiod               int     // collaboration = scoring period: number of steps (epochs)
 	idelay, tdelay         int     // initiator and target "delay" as far as the history of the target /selections/
 	//
 	useGD bool // true - descend, false - evolve
@@ -72,11 +74,11 @@ func init() {
 		//
 		// cluster-wide tunables
 		//
-		1.1,            // service rate: num requests target can handle during one epoch step
-		1.3,            // high scoring thresholds, to control inter-initiator weight exchange
+		1.5,            // service rate: num requests target can handle during one epoch step
+		1.3,            // high scoring thresholds that controls NN copying between initiators
 		10, 10, 1E4, 3, // numbers of initiators and targets, num steps, replicas
 		30,          //	target history size - selection counts that each target keeps back in time
-		100,         // colaboration = scoring period: number of steps (epochs)
+		200,         // collaboration = scoring period: number of steps (epochs)
 		1,           // initiator "sees" the history delayed by so many epochs
 		0,           // target owns the presense
 		false,       // true - descend, false - evolve
@@ -129,14 +131,16 @@ func Test_rcluster(t *testing.T) {
 		if rclr.step%rclr.coperiod == 0 {
 			collab_I() // make use of clustered NN(s) that produced /better/ results
 
-			scLat, scSel := newVector(rclr.ni), newVector(rclr.ni)
+			scLat, scSel, Cost := newVector(rclr.ni), newVector(rclr.ni), newVector(rclr.ni)
 			for i, initiator := range ivec {
 				scLat[i] = float64(initiator.scoreLat) / float64(rclr.coperiod*rclr.ni)
 				scSel[i] = float64(initiator.scoreSel) / float64(rclr.coperiod)
+				Cost[i] = initiator.avgcost
 				initiator.scoreLat, initiator.scoreSel = 0, 0
 			}
-			fmt.Printf("%3d: %.3f\n", rclr.step/rclr.coperiod, scLat)
-			fmt.Printf("%3d: %.3f\n", rclr.step/rclr.coperiod, scSel)
+			fmt.Printf("%3d: %.3f - score min latency\n", rclr.step/rclr.coperiod, scLat)
+			fmt.Printf("%3d: %.3f - score target selection\n", rclr.step/rclr.coperiod, scSel)
+			fmt.Printf("%3d: %.3f - cost last sample\n", rclr.step/rclr.coperiod, Cost)
 			fmt.Printf("%3d: %.3f\n", rclr.step/rclr.coperiod, stat.Correlation(scLat, scSel, nil))
 		}
 	}
@@ -156,15 +160,15 @@ func construct_I() {
 		tu := &NeuTunables{gdalgname: ADAM, batchsize: 10, winit: XavierNewRand}
 		etu := &EvoTunables{
 			NeuTunables: *tu,
-			sigma:       0.5,           // gaussian sigma aka std
-			momentum:    0.01,          //
-			hireward:    0.9,           // high(er) reward threshold and the corresponding learning rate
-			hialpha:     0.01,          //
-			rewd:        0.001,         //
-			rewdup:      rclr.coperiod, // reward delta doubling period
-			nperturb:    64,            // half the number of the NN weight perturbations aka jitters
-			sparsity:    10,            // noise matrix sparsity (%)
-			jinflate:    2}             // gaussian noise inflation ratio, to speed up evolution
+			sigma:       0.01 * float64((i+1)*5), // gaussian sigma aka std - FIXME: just to have some difference!!!
+			momentum:    0.01,                    //
+			hireward:    10.0,                    // diff (in num stds) that warrants a higher learning rate
+			hialpha:     0.01,                    //
+			rewd:        0.001,                   // FIXME: consider using reward / 1000
+			rewdup:      rclr.coperiod,           // reward delta doubling period
+			nperturb:    64,                      // half the number of the NN weight perturbations aka jitters
+			sparsity:    10,                      // noise matrix sparsity (%)
+			jinflate:    2}                       // gaussian noise inflation ratio, to speed up evolution
 
 		evo := NewEvolution(input, hidden, 2, output, etu, i)
 		initiator := &Initiator{
@@ -241,8 +245,17 @@ func score_I() {
 	copy(ivecsorted, ivec)
 	sort.Sort(ByLatency(ivecsorted))
 
-	for i, initiator := range ivecsorted {
-		initiator.scoreLat += rclr.ni - i
+	lat := ivecsorted[0].target.currlat
+	addscore := rclr.ni
+	ivecsorted[0].scoreLat += addscore
+	for i := 1; i < rclr.ni; i++ {
+		initiator := ivecsorted[i]
+		if initiator.target.currlat <= lat+lat/100 {
+			initiator.scoreLat += addscore
+		} else {
+			addscore--
+			initiator.scoreLat += addscore
+		}
 	}
 
 OUTER:
@@ -251,11 +264,41 @@ OUTER:
 			if target == initiator.target {
 				continue
 			}
-			if initiator.target.currlat > target.currlat {
+			if math.Abs(initiator.target.currlat-target.currlat) < fmin(target.currlat/100, initiator.target.currlat/100) {
 				continue OUTER
 			}
 		}
 		initiator.scoreSel++
+	}
+}
+
+func (initiator *Initiator) score() int {
+	return initiator.scoreLat
+	// return initiator.scoreSel
+}
+
+// FIXME: which score do I use: scoreLat or scoreSel or else? Which one will converge??
+func collab_I() {
+	topscore, topidx := -1, -1
+	for i, initiator := range ivec {
+		if initiator.score() >= topscore {
+			topscore = initiator.score()
+			topidx = i
+		}
+	}
+	first := &ivec[topidx].evo.NeuNetwork
+	for i, initiator := range ivec {
+		if i == topidx {
+			continue
+		}
+		w1 := float64(topscore) / float64(topscore+initiator.score())
+		w2 := float64(initiator.score()) / float64(topscore+initiator.score())
+		if w1 > w2*rclr.scorehigh {
+			fmt.Printf("%d(%.3f) --> %d(%.3f)\n", topidx, w1, i, w2)
+			nn := &initiator.evo.NeuNetwork
+			nn.reset()
+			nn.copyNetwork(first)
+		}
 	}
 }
 
@@ -279,8 +322,8 @@ func (initiator *Initiator) revolution() {
 		}
 		rclr.nextround.Unlock()
 
-		Xs[i] = cloneVector(initiator.distory)
-		Ys[i][0] = initiator.target.currlat
+		copyVector(Xs[i], initiator.distory)
+		Ys[i][0] = initiator.target.currlat // FIXME: y = min-latency(3 targets)
 
 		// Train(mini-batch) sequence:
 		initiator.evo.TrainStep(Xs[i], Ys[i])
@@ -288,6 +331,9 @@ func (initiator *Initiator) revolution() {
 		if i == b {
 			initiator.evo.fixWeights(b)
 			i = 0
+			// FIXME: average over coperiod
+			initiator.evo.reForward()
+			initiator.avgcost = initiator.evo.costfunction(Ys[b-1])
 		}
 		step++
 		rclr.wg.Done() // goroutine step done
@@ -301,12 +347,10 @@ func (initiator *Initiator) gradientDescent() {
 
 	b := initiator.evo.tunables.batchsize
 	Xs, Ys := newMatrix(b, rclr.hisize), newMatrix(b, 1)
-	ttp := &TTP{nn: &initiator.evo.NeuNetwork, resultset: Ys, repeat: 3}
-	i := 0
-	step := 1
+	ttp := &TTP{nn: &initiator.evo.NeuNetwork, resultset: Ys}
+	i, step := 0, 1
 
 	rclr.wg.Done() // goroutine init done
-
 	for {
 		// fmt.Printf("--> %d\n", initiator.id)
 		rclr.nextround.Lock()
@@ -315,8 +359,7 @@ func (initiator *Initiator) gradientDescent() {
 		}
 		rclr.nextround.Unlock()
 
-		Xs[i] = cloneVector(initiator.distory)
-
+		copyVector(Xs[i], initiator.distory)
 		Ys[i][0] = initiator.target.currlat
 		i++
 		if i == b {
@@ -325,30 +368,6 @@ func (initiator *Initiator) gradientDescent() {
 		}
 		step++
 		rclr.wg.Done() // goroutine step done
-	}
-}
-
-func collab_I() {
-	topscore, topidx := -1, -1
-	for i, initiator := range ivec {
-		if initiator.scoreLat >= topscore {
-			topscore = initiator.scoreLat
-			topidx = i
-		}
-	}
-	first := &ivec[topidx].evo.NeuNetwork
-	for i, initiator := range ivec {
-		if i == topidx {
-			continue
-		}
-		w1 := float64(topscore) / float64(topscore+initiator.scoreLat)
-		w2 := float64(initiator.scoreLat) / float64(topscore+initiator.scoreLat)
-		if w1 > w2*rclr.scorehigh {
-			fmt.Printf("%d(%.3f) --> %d(%.3f)\n", topidx, w1, i, w2)
-			nn := &initiator.evo.NeuNetwork
-			nn.reset()
-			nn.copyNetwork(first)
-		}
 	}
 }
 

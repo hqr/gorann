@@ -67,9 +67,9 @@ func Test_nespy_alt(t *testing.T) {
 
 	// start the optimization
 	var solution = []float64{0.5, 0.1, -0.3}
-	var rThresh = 0.9
+	var rThresh = 10.0
 	w := newVector(3, 0.0, 1.0, "normal")
-	for i := 0; i < 300; i++ {
+	for i := 0; i < 600; i++ {
 		if i%20 == 0 {
 			fmt.Printf("%d, %.5v, %.5f\n", i, w, fn_nespy(w, solution))
 		}
@@ -88,13 +88,13 @@ func Test_nespy_alt(t *testing.T) {
 		// standardize the rewards to have a gaussian distribution
 		// A = (R - np.mean(R)) / np.std(R)
 		A := cloneVector(R)
-		standardizeVectorZscore(A)
+		mean, std := standardizeVectorZscore(A)
 		for j := 0; j < npop; j++ {
 			// prioritize those parameter updates that yield bigger rewards
-			if A[j] > rThresh {
+			if A[j] > mean+rThresh*std {
 				mulVectorNum(N[j], 0.1*A[j])
 				addVectorElem(w, N[j])
-				rThresh += 0.001
+				rThresh += 0.5
 			} else {
 				mulVectorNum(N[j], alpha*A[j])
 				addVectorElem(w, N[j])

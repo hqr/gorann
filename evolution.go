@@ -135,18 +135,20 @@ func (evo *Evolution) backpropGradients() {
 	//
 	// standardize the rewards and update the gradient
 	//
-	standardizeVectorZscore(evo.rewards)
+	mean, std := standardizeVectorZscore(evo.rewards)
 	for jj, j := 0, 0; j < evo.tunables.nperturb; j++ {
 		if evo.rewards[jj] > evo.rewards[jj+1]+evo.tunables.rewd {
-			if evo.rewards[jj] > evo.tunables.hireward {
+			if evo.rewards[jj] > mean+evo.tunables.hireward*std { // FIXME: heuristic big time
 				mulMatrixNum(noisycube[jj], evo.tunables.hialpha*evo.rewards[jj])
+				evo.tunables.hireward += evo.tunables.hireward / 1000 // FIXME: likewise
 			} else {
 				mulMatrixNum(noisycube[jj], evo.tunables.alpha*evo.rewards[jj])
 			}
 			addMatrixElem(layer.gradient, noisycube[jj])
 		} else if evo.rewards[jj+1] > evo.rewards[jj]+evo.tunables.rewd {
-			if evo.rewards[jj+1] > evo.tunables.hireward {
+			if evo.rewards[jj+1] > mean+evo.tunables.hireward*std {
 				mulMatrixNum(noisycube[jj+1], evo.tunables.hialpha*evo.rewards[jj+1])
+				evo.tunables.hireward += evo.tunables.hireward / 1000
 			} else {
 				mulMatrixNum(noisycube[jj+1], evo.tunables.alpha*evo.rewards[jj+1])
 			}

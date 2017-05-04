@@ -188,12 +188,13 @@ func meanStdVector(vec []float64) (mean, std float64) {
 }
 
 // z-score standardization
-func standardizeVectorZscore(vec []float64) {
+func standardizeVectorZscore(vec []float64) (mean, std float64) {
 	flen := float64(len(vec))
-	mean := meanVector(vec)
+	mean = meanVector(vec)
 	addVectorNum(vec, -mean)
-	std := math.Sqrt(normL2VectorSquared(vec, nil) / flen)
+	std = math.Sqrt(normL2VectorSquared(vec, nil) / flen)
 	divVectorNum(vec, std)
+	return
 }
 
 func normL1Vector(avec []float64, bvec []float64) float64 {
