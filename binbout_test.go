@@ -148,6 +148,32 @@ func Test_transform_56_2(t *testing.T) {
 	transformBits(t, nn)
 }
 
+func Test_transform_56_2_evo(t *testing.T) {
+	rand.Seed(0)
+	input := NeuLayerConfig{size: 16}
+	hidden := NeuLayerConfig{"sigmoid", 56}
+	output := NeuLayerConfig{"sigmoid", 16}
+	//
+	// nn := NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: Xavier})
+	//
+	tu := &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: Xavier}
+	etu := &EvoTunables{
+		NeuTunables: *tu,
+		sigma:       0.1,           // normal-noise(0, sigma)
+		momentum:    0.1,           //
+		hireward:    10.0,          // diff (in num stds) that warrants a higher learning rate
+		hialpha:     0.1,           //
+		rewd:        0.001,         // FIXME: consider using reward / 1000
+		rewdup:      rclr.coperiod, // reward delta doubling period
+		nperturb:    256,           // half the number of the NN weight perturbations aka jitters
+		sparsity:    50,            // noise matrix sparsity (%)
+		jinflate:    2}             // gaussian noise inflation ratio, to speed up evolution
+
+	evo := NewEvolution(input, hidden, 2, output, etu, 0)
+
+	transformBits(t, &evo.NeuNetwork)
+}
+
 func Test_transform_48_2(t *testing.T) {
 	rand.Seed(0)
 	input := NeuLayerConfig{size: 16}

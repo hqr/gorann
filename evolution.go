@@ -28,8 +28,7 @@ type Evolution struct {
 	newrand  *rand.Rand
 	id       int
 	// runtime
-	nevolves int
-	l        int // NN layer round robin
+	l int // NN layer round robin
 }
 
 func NewEvolution(
@@ -69,12 +68,13 @@ func NewEvolution(
 func (evo *Evolution) computeDeltas(yvec []float64) []float64 {
 	assert(len(yvec) == evo.coutput.size)
 	olayer := evo.layers[evo.lastidx]
-	copyVector(olayer.deltas, yvec) // FIXME: find a better (named) place
+	copyVector(olayer.deltas, yvec) // FIXME: temp, to pass between IF routines
 	return yvec
 }
 
 // overload to generate normal jitter for the layer l
 func (evo *Evolution) backpropDeltas() {
+	evo.nbackprops++
 	l := evo.l % evo.lastidx
 	layer := evo.NeuNetwork.layers[l]
 	cols := layer.next.size
@@ -103,8 +103,7 @@ func (evo *Evolution) backpropDeltas() {
 }
 
 func (evo *Evolution) backpropGradients() {
-	evo.nevolves++
-	if evo.nevolves%evo.tunables.rewdup == 0 {
+	if evo.nbackprops%evo.tunables.rewdup == 0 {
 		evo.tunables.rewd *= 2
 	}
 	// round robin: one layer at a time
@@ -164,7 +163,6 @@ func (evo *Evolution) fixWeights(batchsize int) {
 	nn := &evo.NeuNetwork
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
-		divMatrixNum(layer.gradient, float64(batchsize))
 		addMatrixElem(layer.weights, layer.gradient)
 
 		if evo.tunables.momentum > 0 {

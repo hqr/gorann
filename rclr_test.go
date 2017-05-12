@@ -75,14 +75,14 @@ func init() {
 		// cluster-wide tunables
 		//
 		1.5,            // service rate: num requests target can handle during one epoch step
-		1.3,            // high scoring thresholds that controls NN copying between initiators
+		123456,         //1.3, // FIXME: disabled: high scoring thresholds that controls NN copying between initiators
 		10, 10, 1E4, 3, // numbers of initiators and targets, num steps, replicas
 		30,          //	target history size - selection counts that each target keeps back in time
 		200,         // collaboration = scoring period: number of steps (epochs)
 		1,           // initiator "sees" the history delayed by so many epochs
 		0,           // target owns the presense
 		false,       // true - descend, false - evolve
-		fn4_latency, //
+		fn5_latency, //
 	}
 	ivec = make([]*Initiator, rclr.ni)
 	ivecsorted = make([]*Initiator, rclr.ni)
@@ -135,7 +135,9 @@ func Test_rcluster(t *testing.T) {
 			for i, initiator := range ivec {
 				scLat[i] = float64(initiator.scoreLat) / float64(rclr.coperiod*rclr.ni)
 				scSel[i] = float64(initiator.scoreSel) / float64(rclr.coperiod)
-				Cost[i] = initiator.avgcost
+				b := initiator.evo.tunables.batchsize
+				Cost[i] = initiator.avgcost * float64(b) / float64(rclr.coperiod)
+				initiator.avgcost = 0
 				initiator.scoreLat, initiator.scoreSel = 0, 0
 			}
 			fmt.Printf("%3d: %.3f - score min latency\n", rclr.step/rclr.coperiod, scLat)
@@ -156,19 +158,20 @@ func construct_I() {
 	for i, _ := range ivec {
 		input := NeuLayerConfig{size: rclr.hisize}
 		hidden := NeuLayerConfig{"sigmoid", input.size * 2}
-		output := NeuLayerConfig{"identity", 1}
+		// output := NeuLayerConfig{"identity", 1}
+		output := NeuLayerConfig{"sigmoid", 1}
 		tu := &NeuTunables{gdalgname: ADAM, batchsize: 10, winit: XavierNewRand}
 		etu := &EvoTunables{
 			NeuTunables: *tu,
-			sigma:       0.01 * float64((i+1)*5), // gaussian sigma aka std - FIXME: just to have some difference!!!
-			momentum:    0.01,                    //
-			hireward:    10.0,                    // diff (in num stds) that warrants a higher learning rate
-			hialpha:     0.01,                    //
-			rewd:        0.001,                   // FIXME: consider using reward / 1000
-			rewdup:      rclr.coperiod,           // reward delta doubling period
-			nperturb:    64,                      // half the number of the NN weight perturbations aka jitters
-			sparsity:    10,                      // noise matrix sparsity (%)
-			jinflate:    2}                       // gaussian noise inflation ratio, to speed up evolution
+			sigma:       0.01,          // normal-noise(0, sigma)
+			momentum:    0.01,          //
+			hireward:    10.0,          // diff (in num stds) that warrants a higher learning rate
+			hialpha:     0.01,          //
+			rewd:        0.001,         // FIXME: consider using reward / 1000
+			rewdup:      rclr.coperiod, // reward delta doubling period
+			nperturb:    64,            // half the number of the NN weight perturbations aka jitters
+			sparsity:    10,            // noise matrix sparsity (%)
+			jinflate:    2}             // gaussian noise inflation ratio, to speed up evolution
 
 		evo := NewEvolution(input, hidden, 2, output, etu, i)
 		initiator := &Initiator{
@@ -302,7 +305,9 @@ func collab_I() {
 	}
 }
 
-// run forever one mini-batch at a time (similar to gradientDescent)
+// streaming mode execution:
+// run forever, one sample and one mini-batch at a time
+// (compare to gradientDescent() alternative below)
 func (initiator *Initiator) revolution() {
 	newrand := initiator.evo.newrand
 	newrand.Seed(int64(initiator.id))
@@ -323,17 +328,16 @@ func (initiator *Initiator) revolution() {
 		rclr.nextround.Unlock()
 
 		copyVector(Xs[i], initiator.distory)
-		Ys[i][0] = initiator.target.currlat // FIXME: y = min-latency(3 targets)
+		Ys[i][0] = initiator.target.currlat
 
-		// Train(mini-batch) sequence:
 		initiator.evo.TrainStep(Xs[i], Ys[i])
 		i++
 		if i == b {
+			initiator.evo.fixGradients(b)
 			initiator.evo.fixWeights(b)
 			i = 0
-			// FIXME: average over coperiod
 			initiator.evo.reForward()
-			initiator.avgcost = initiator.evo.costfunction(Ys[b-1])
+			initiator.avgcost += initiator.evo.costfunction(Ys[b-1])
 		}
 		step++
 		rclr.wg.Done() // goroutine step done
@@ -365,6 +369,9 @@ func (initiator *Initiator) gradientDescent() {
 		if i == b {
 			initiator.evo.Train(Xs, ttp)
 			i = 0
+			// FIXME: average over coperiod
+			initiator.evo.reForward()
+			initiator.avgcost += initiator.evo.costfunction(Ys[b-1])
 		}
 		step++
 		rclr.wg.Done() // goroutine step done
@@ -423,6 +430,17 @@ func fn4_latency(h []float64) (lat float64) {
 		}
 	}
 	reqs += h[0] * float64(rclr.ni)
-	lat = reqs / rclr.svcrate
+	lat = reqs / rclr.svcrate / 20 // normalize
+	return
+}
+
+// high index of dispersion must cause a spike..
+func fn5_latency(h []float64) (lat float64) {
+	mean, std := meanStdVector(h[0:10])
+	D := std * std / (mean + DEFAULT_eps)
+	lat = fn4_latency(h)
+	if D > 0.2 {
+		lat *= (2 + D)
+	}
 	return
 }
