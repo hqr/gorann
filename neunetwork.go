@@ -19,8 +19,10 @@ type NeuNetworkInterface interface {
 	// cost
 	costfunction(yvec []float64) (cost float64)
 	// aux
+	normalizeY(yvec []float64) []float64
 	populateInput(xvec []float64, normalize bool)
 	populateDeltas(deltas []float64)
+	initXavier(newrand *rand.Rand)
 	// Get accessors
 	getCinput() *NeuLayerConfig
 	getCoutput() *NeuLayerConfig
@@ -279,6 +281,15 @@ func (nn *NeuNetwork) copyNetwork(from *NeuNetwork) {
 
 		copyMatrix(layer.weights, layer_from.weights)
 	}
+}
+
+func (nn *NeuNetwork) normalizeY(yvec []float64) []float64 {
+	var ynorm = yvec
+	if nn.callbacks != nil && nn.callbacks.normcbY != nil {
+		ynorm = cloneVector(yvec) // FIXME: preallocate
+		nn.callbacks.normcbY(ynorm)
+	}
+	return ynorm
 }
 
 func (nn *NeuNetwork) populateInput(xvec []float64, normalize bool) {

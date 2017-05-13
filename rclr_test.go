@@ -9,20 +9,20 @@ import (
 	"math"
 	"math/rand"
 	"sort"
-	"sync"
 	"testing"
 )
 
 // types
 type Initiator struct {
 	evo *Evolution
+	r   *NeuRunner
 	// cluster
 	reptvec []*Target
 	// selected target, its estimated latency, and a copy of (delayed) history
 	target   *Target
 	minlat   float64
 	distory  []float64 // [[selectcnt / ni]]
-	avgcost  float64
+	xvectmp  []float64
 	scoreLat int
 	scoreSel int
 	id       int
@@ -46,11 +46,7 @@ var rclr *RCLR
 // cluster single+config
 //
 type RCLR struct {
-	wg        *sync.WaitGroup
-	nextround *sync.Mutex
-	cond      *sync.Cond
-	step      int
-	res1      int
+	p *NeuParallel
 	//
 	// cluster-wide tunables
 	//
@@ -61,16 +57,13 @@ type RCLR struct {
 	coperiod               int     // collaboration = scoring period: number of steps (epochs)
 	idelay, tdelay         int     // initiator and target "delay" as far as the history of the target /selections/
 	//
-	useGD bool // true - descend, false - evolve
-	//
 	fnlatency func(h []float64) float64
 }
 
 func init() {
+	p := NewNeuParallel()
 	rclr = &RCLR{
-		&sync.WaitGroup{},
-		&sync.Mutex{},
-		nil, 0, -1,
+		p,
 		//
 		// cluster-wide tunables
 		//
@@ -81,7 +74,6 @@ func init() {
 		200,         // collaboration = scoring period: number of steps (epochs)
 		1,           // initiator "sees" the history delayed by so many epochs
 		0,           // target owns the presense
-		false,       // true - descend, false - evolve
 		fn5_latency, //
 	}
 	ivec = make([]*Initiator, rclr.ni)
@@ -97,55 +89,49 @@ func Test_rcluster(t *testing.T) {
 	construct_T()
 	construct_I()
 
-	rclr.cond = sync.NewCond(rclr.nextround)
-	rclr.nextround.Lock()
-	rclr.wg.Add(rclr.ni)
 	for _, initiator := range ivec {
-		if rclr.useGD {
-			go initiator.gradientDescent()
-		} else {
-			go initiator.revolution() // go run evolution
-		}
+		r := rclr.p.attach(initiator.evo, initiator.id)
+		initiator.r = r
 	}
+	rclr.p.start()
 
-	rclr.wg.Wait()
-	rclr.wg.Add(rclr.ni)
-
+	var yvec = []float64{0}
+	scLat, scSel, scCost := newVector(rclr.ni), newVector(rclr.ni), newVector(rclr.ni)
 	for {
-		if rclr.step > rclr.nsteps {
+		if rclr.p.step > rclr.nsteps {
 			break
 		}
 		compute_I() // I: select 3 rep-holding Ts, compute latencies, select the NN-estimated min
 		compute_T() // T: given target selections, compute true latencies
 		score_I()   // I: score based on the sorted order, by initiator latency
 
-		// synchronize with the (I) workers
-		rclr.step++
-		rclr.nextround.Unlock()
-		rclr.cond.Broadcast()
-		rclr.wg.Wait() // ===================>>> revolution | gradientDescent
-		rclr.nextround.Lock()
-		rclr.wg.Add(rclr.ni)
+		// add training sample
+		for _, initiator := range ivec {
+			yvec[0] = initiator.target.currlat
+			initiator.r.addSample(initiator.distory, yvec)
+		}
+		// compute in parallel
+		rclr.p.compute()
 
 		// inter-initiator collaboration
-		if rclr.step%rclr.coperiod == 0 {
+		if rclr.p.step%rclr.coperiod == 0 {
 			collab_I() // make use of clustered NN(s) that produced /better/ results
 
-			scLat, scSel, Cost := newVector(rclr.ni), newVector(rclr.ni), newVector(rclr.ni)
 			for i, initiator := range ivec {
 				scLat[i] = float64(initiator.scoreLat) / float64(rclr.coperiod*rclr.ni)
 				scSel[i] = float64(initiator.scoreSel) / float64(rclr.coperiod)
-				b := initiator.evo.tunables.batchsize
-				Cost[i] = initiator.avgcost * float64(b) / float64(rclr.coperiod)
-				initiator.avgcost = 0
+				b := initiator.evo.getTunables().batchsize
+				scCost[i] = initiator.r.avgcost * float64(b) / float64(rclr.coperiod)
+				initiator.r.avgcost = 0
 				initiator.scoreLat, initiator.scoreSel = 0, 0
 			}
-			fmt.Printf("%3d: %.3f - score min latency\n", rclr.step/rclr.coperiod, scLat)
-			fmt.Printf("%3d: %.3f - score target selection\n", rclr.step/rclr.coperiod, scSel)
-			fmt.Printf("%3d: %.3f - cost last sample\n", rclr.step/rclr.coperiod, Cost)
-			fmt.Printf("%3d: %.3f\n", rclr.step/rclr.coperiod, stat.Correlation(scLat, scSel, nil))
+			fmt.Printf("%3d: %.3f - score min latency\n", rclr.p.step/rclr.coperiod, scLat)
+			fmt.Printf("%3d: %.3f - score target selection\n", rclr.p.step/rclr.coperiod, scSel)
+			fmt.Printf("%3d: %.3f - cost last sample\n", rclr.p.step/rclr.coperiod, scCost)
+			fmt.Printf("%3d: %.3f\n", rclr.p.step/rclr.coperiod, stat.Correlation(scLat, scSel, nil))
 		}
 	}
+	rclr.p.stop()
 }
 
 func construct_T() {
@@ -178,7 +164,9 @@ func construct_I() {
 			evo:     evo,
 			reptvec: make([]*Target, rclr.copies),
 			distory: newVector(rclr.hisize),
+			xvectmp: newVector(rclr.hisize),
 			id:      i}
+
 		ivec[i] = initiator
 	}
 }
@@ -187,7 +175,6 @@ func compute_I() {
 	for _, target := range tvec {
 		target.selectcnt = 0
 	}
-	xvec := newVector(rclr.hisize)
 	for _, initiator := range ivec {
 		newrand := initiator.evo.newrand
 		// 3 targets holding the replica that we want to read
@@ -198,18 +185,18 @@ func compute_I() {
 		initiator.target = nil
 		for i := 0; i < rclr.copies; i++ {
 			// this target selection history, delayed and shifted one epoch back
-			copy(xvec[1:], initiator.reptvec[i].history[rclr.idelay:rclr.idelay+rclr.hisize])
+			copy(initiator.xvectmp[1:], initiator.reptvec[i].history[rclr.idelay:rclr.idelay+rclr.hisize])
 
 			// as far as the presense, let's assume I'll select this target
 			// and will be the only one having it...
-			xvec[0] += 1.0 / float64(rclr.ni)
+			initiator.xvectmp[0] += 1.0 / float64(rclr.ni)
 
 			// use NN to predict
 			avec := initiator.evo.Predict(initiator.distory)
 			if initiator.target == nil || initiator.minlat > avec[0] {
 				initiator.minlat = avec[0]
 				initiator.target = initiator.reptvec[i]
-				copy(initiator.distory, xvec)
+				copy(initiator.distory, initiator.xvectmp)
 			}
 		}
 		initiator.target.selectcnt++
@@ -302,79 +289,6 @@ func collab_I() {
 			nn.reset()
 			nn.copyNetwork(first)
 		}
-	}
-}
-
-// streaming mode execution:
-// run forever, one sample and one mini-batch at a time
-// (compare to gradientDescent() alternative below)
-func (initiator *Initiator) revolution() {
-	newrand := initiator.evo.newrand
-	newrand.Seed(int64(initiator.id))
-	if initiator.evo.tunables.winit == XavierNewRand {
-		initiator.evo.initXavier(newrand)
-	}
-	b := initiator.evo.tunables.batchsize
-	Xs, Ys := newMatrix(b, rclr.hisize), newMatrix(b, 1)
-	i, step := 0, 1
-
-	rclr.wg.Done() // goroutine init done
-	for {
-		// wait for the siblings and for the main to do its part
-		rclr.nextround.Lock()
-		for rclr.step != step {
-			rclr.cond.Wait()
-		}
-		rclr.nextround.Unlock()
-
-		copyVector(Xs[i], initiator.distory)
-		Ys[i][0] = initiator.target.currlat
-
-		initiator.evo.TrainStep(Xs[i], Ys[i])
-		i++
-		if i == b {
-			initiator.evo.fixGradients(b)
-			initiator.evo.fixWeights(b)
-			i = 0
-			initiator.evo.reForward()
-			initiator.avgcost += initiator.evo.costfunction(Ys[b-1])
-		}
-		step++
-		rclr.wg.Done() // goroutine step done
-	}
-}
-
-func (initiator *Initiator) gradientDescent() {
-	newrand := initiator.evo.newrand
-	newrand.Seed(int64(initiator.id))
-	initiator.evo.initXavier(newrand)
-
-	b := initiator.evo.tunables.batchsize
-	Xs, Ys := newMatrix(b, rclr.hisize), newMatrix(b, 1)
-	ttp := &TTP{nn: &initiator.evo.NeuNetwork, resultset: Ys}
-	i, step := 0, 1
-
-	rclr.wg.Done() // goroutine init done
-	for {
-		// fmt.Printf("--> %d\n", initiator.id)
-		rclr.nextround.Lock()
-		for rclr.step != step {
-			rclr.cond.Wait()
-		}
-		rclr.nextround.Unlock()
-
-		copyVector(Xs[i], initiator.distory)
-		Ys[i][0] = initiator.target.currlat
-		i++
-		if i == b {
-			initiator.evo.Train(Xs, ttp)
-			i = 0
-			// FIXME: average over coperiod
-			initiator.evo.reForward()
-			initiator.avgcost += initiator.evo.costfunction(Ys[b-1])
-		}
-		step++
-		rclr.wg.Done() // goroutine step done
 	}
 }
 

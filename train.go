@@ -246,7 +246,7 @@ func (nn *NeuNetwork) Train_and_CheckGradients(xbatch [][]float64, ttp *TTP, idx
 	for k := 0; k < batchsize; k++ {
 		xvec := xbatch[k]
 		yvec := ttp.getYvec(xvec, idxbase+k)
-		nn.TrainStep(xvec, yvec)
+		TrainStep(nn.nnint, xvec, yvec)
 
 		layer.weights[i][j] = wplus
 		nn.nnint.reForward()
@@ -269,25 +269,26 @@ func (nn *NeuNetwork) Train_and_CheckGradients(xbatch [][]float64, ttp *TTP, idx
 	nn.nnint.fixWeights(batchsize) // <============== (2)
 }
 
-func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
-	assert(nn.coutput.size == len(yvec), fmt.Sprintf("num outputs: %d (must be %d)", len(yvec), nn.coutput.size))
-
-	nn.nnint.forward(xvec)
-	var ynorm = yvec
-	if nn.callbacks != nil && nn.callbacks.normcbY != nil {
-		ynorm = cloneVector(yvec)
-		nn.callbacks.normcbY(ynorm)
-	}
-	nn.nnint.computeDeltas(ynorm)
-	nn.nnint.backpropDeltas()
-	nn.nnint.backpropGradients()
+//============================================================
+//
+// global class-less
+// use NN interface to execute
+// single step in both directions: forward and back
+//
+//============================================================
+func TrainStep(nnint NeuNetworkInterface, xvec []float64, yvec []float64) {
+	nnint.forward(xvec)
+	ynorm := nnint.normalizeY(yvec)
+	nnint.computeDeltas(ynorm)
+	nnint.backpropDeltas()
+	nnint.backpropGradients()
 }
 
 func (nn *NeuNetwork) TrainSet(Xs [][]float64, ttp *TTP, costnum int) int {
 	m, bi, batchsize, cost := len(Xs), 0, ttp.batchsize, 0.0
 	for i, xvec := range Xs {
 		yvec := ttp.getYvec(xvec, i)
-		nn.TrainStep(xvec, yvec)
+		TrainStep(nn.nnint, xvec, yvec)
 		// costnum > 0: cumulative cost of the last so-many examples in the set
 		if costnum > m-i-1 {
 			cost += nn.costfunction(yvec)

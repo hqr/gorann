@@ -19,11 +19,7 @@ func (nn *NeuNetwork) costfunction(yvec []float64) (cost float64) {
 //
 func (nn *NeuNetwork) CostMse(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
-	var ynorm = yvec
-	if nn.callbacks != nil && nn.callbacks.normcbY != nil {
-		ynorm = cloneVector(yvec)
-		nn.callbacks.normcbY(ynorm)
-	}
+	ynorm := nn.normalizeY(yvec)
 	olayer := nn.layers[nn.lastidx]
 	return normL2VectorSquared(ynorm, olayer.avec) / 2
 }
@@ -54,11 +50,7 @@ func (nn *NeuNetwork) costl2regeps(l int, i int, j int, eps float64) float64 {
 
 func (nn *NeuNetwork) CostCrossEntropy(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
-	var ynorm = yvec
-	if nn.callbacks != nil && nn.callbacks.normcbY != nil {
-		ynorm = cloneVector(yvec)
-		nn.callbacks.normcbY(ynorm)
-	}
+	ynorm := nn.normalizeY(yvec)
 	olayer := nn.layers[nn.lastidx]
 	aname, avec, zvec := olayer.config.actfname, olayer.avec, olayer.zvec
 	var err float64
