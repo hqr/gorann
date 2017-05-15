@@ -162,9 +162,9 @@ func normL2VectorSquared(avec []float64, bvec []float64) float64 {
 	edist := 0.0
 	for c := 0; c < cols; c++ {
 		if bvec == nil {
-			edist += math.Pow(avec[c], 2)
+			edist += pow2(avec[c])
 		} else {
-			edist += math.Pow(avec[c]-bvec[c], 2)
+			edist += pow2(avec[c] - bvec[c])
 		}
 	}
 	return edist
@@ -403,4 +403,8 @@ func fmin(a float64, b float64) float64 {
 		return b
 	}
 	return a
+}
+
+func pow2(a float64) float64 {
+	return a * a
 }

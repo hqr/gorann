@@ -194,13 +194,13 @@ func Test_hartmann(t *testing.T) {
 	//
 	// henceforth, the usual training (regression) on random samples
 	//
-	Xs := newMatrix(10000, nn.nnint.getIsize())
+	Xs := newMatrix(10000, evo.getIsize())
 	converged := 0
 	prevmax := 0.0
-	ttp := &TTP{nn: nn, resultvalcb: fn_hartmann, pct: 10, maxbackprops: 1E7, repeat: 3}
+	ttp := &TTP{nn: evo, resultvalcb: fn_hartmann, pct: 10, maxbackprops: 1E7, repeat: 3}
 	for converged == 0 {
 		hart6_fill(Xs)
-		converged = nn.Train(Xs, ttp)
+		converged = ttp.Train(TtpArr(Xs))
 
 		for i := 0; i < len(Xs); i++ {
 			avec := nn.nnint.forward(hart6_opt)

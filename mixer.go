@@ -100,9 +100,10 @@ func NewWeightedMixerNN(nns ...NeuNetworkInterface) *WeightedMixerNN {
 // in the forward pass networks do the work
 func (mixer *WeightedMixerNN) forward(xvec []float64) []float64 {
 	var xnorm = xvec
-	if mixer.callbacks != nil && mixer.callbacks.normcbX != nil {
+	cb := mixer.getCallbacks()
+	if cb != nil && cb.normcbX != nil {
 		xnorm = cloneVector(xvec)
-		mixer.callbacks.normcbX(xnorm)
+		cb.normcbX(xnorm)
 	}
 	for i := 0; i < len(mixer.nns); i++ {
 		if mixer.lost[i] {

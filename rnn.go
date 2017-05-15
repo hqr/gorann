@@ -29,9 +29,10 @@ func NewNaiveRnn(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int, c
 
 func (rnn *NaiveRnn) forward(xvec []float64) []float64 {
 	var xnorm = xvec
-	if rnn.callbacks != nil && rnn.callbacks.normcbX != nil {
+	cb := rnn.getCallbacks()
+	if cb != nil && cb.normcbX != nil {
 		xnorm = cloneVector(xvec)
-		rnn.callbacks.normcbX(xnorm)
+		cb.normcbX(xnorm)
 	}
 	ilayer := rnn.layers[0]
 	copy(ilayer.avec, xnorm)
@@ -113,9 +114,10 @@ func NewUnrolledRnn(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int
 
 func (rnn *UnrolledRnn) forward(xvec []float64) []float64 {
 	var xnorm = xvec
-	if rnn.callbacks != nil && rnn.callbacks.normcbX != nil {
+	cb := rnn.getCallbacks()
+	if cb != nil && cb.normcbX != nil {
 		xnorm = cloneVector(xvec)
-		rnn.callbacks.normcbX(xnorm)
+		cb.normcbX(xnorm)
 	}
 	ilayer := rnn.layers[0]
 	numhidden := len(rnn.rhlayers)

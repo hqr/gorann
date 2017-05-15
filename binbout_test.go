@@ -103,7 +103,7 @@ func xornbits(t *testing.T, nn *NeuNetwork) {
 	converged := 0
 	ttp := &TTP{nn: nn, resultvalcb: _xornbits, pct: 50, maxbackprops: 2E6}
 	for converged == 0 {
-		converged = nn.Train(Xs, ttp)
+		converged = ttp.Train(TtpArr(Xs))
 	}
 	var crossen, mse float64
 	// try the trained network on some new data
@@ -239,7 +239,7 @@ func transformBits(t *testing.T, nn *NeuNetwork) {
 	converged := 0
 	ttp := &TTP{nn: nn, resultvalcb: _transformBits, pct: 50, maxbackprops: 1E7}
 	for converged == 0 {
-		converged = nn.Train(Xs, ttp)
+		converged = ttp.Train(TtpArr(Xs))
 	}
 	var crossen, mse float64
 	// try the trained network on some new data
@@ -300,7 +300,7 @@ func Test_classify(t *testing.T) {
 	}
 	converged := 0
 	for converged == 0 {
-		converged = nn.Train(Xs, ttp)
+		converged = ttp.Train(TtpArr(Xs))
 	}
 	var crossen, mse float64
 	num := 8
@@ -323,7 +323,7 @@ func Test_classify(t *testing.T) {
 	}
 	fmt.Printf("cross-entropy %.5f, mse %.5f\n", crossen/float64(num), mse/float64(num))
 	if converged&ConvergedMaxBackprops > 0 {
-		t.Errorf("reached the maximum number of back propagations (%d)\n", nn.nbackprops)
+		t.Errorf("reached the maximum number of back propagations (%d)\n", nn.getNbprops())
 	}
 }
 
@@ -373,7 +373,7 @@ func crc32cbytes(t *testing.T, nn *NeuNetwork) {
 	converged := 0
 	ttp := &TTP{nn: nn, resultvalcb: _crc32cbytes, pct: 50, maxbackprops: 1E7}
 	for converged == 0 {
-		converged = nn.Train(Xs, ttp)
+		converged = ttp.Train(TtpArr(Xs))
 	}
 	var mse float64
 	// try the trained network on some new data

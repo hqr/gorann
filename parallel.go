@@ -121,7 +121,7 @@ func (r *NeuRunner) run() {
 
 		// compute
 		for r.j < r.i {
-			TrainStep(r.nnint, r.Xb[r.j], r.Yb[r.j])
+			r.nnint.TrainStep(r.Xb[r.j], r.Yb[r.j])
 			r.j++
 		}
 		if r.i == b {
