@@ -101,6 +101,8 @@ func dsoftplus(x float64) float64 {
 //-----------------------------------------------------------------------
 //
 // softmax - special case, not registered
+// NOTE:
+// softmax on the output layer MUST only be used with cross-entropy cost
 //
 //-----------------------------------------------------------------------
 func softmax(sumexp float64, x float64) float64 {

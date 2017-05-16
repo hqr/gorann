@@ -4,13 +4,8 @@ import (
 	"math"
 )
 
-func (nn *NeuNetwork) costfunction(yvec []float64) (cost float64) {
-	if nn.tunables.costfname == CostCrossEntropy {
-		cost = nn.CostCrossEntropy(yvec)
-	} else {
-		cost = nn.CostMse(yvec)
-	}
-	return
+func (nn *NeuNetwork) costfunction(yvec []float64) float64 {
+	return nn.tunables.costfunction(yvec)
 }
 
 //

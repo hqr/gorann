@@ -10,12 +10,12 @@ type NeuRunner struct {
 	nnint   NeuNetworkInterface
 	p       *NeuParallel
 	newrand *rand.Rand
-	Xb      [][]float64
-	Yb      [][]float64
+	trwin   *TreamWin // ttp stream window
 	avgcost float64
 	id      int
 	step    int
-	i, j    int
+	trained int
+	fixed   int
 	stopped bool
 }
 
@@ -26,15 +26,17 @@ type NeuParallel struct {
 	nextround *sync.Mutex
 	cond      *sync.Cond
 	step      int
+	size      int // ttp stream window size
 }
 
-func NewNeuParallel() *NeuParallel {
+func NewNeuParallel(size int) *NeuParallel {
 	p := &NeuParallel{
 		make(map[int]*NeuRunner, 8),
 		&sync.WaitGroup{},
 		&sync.Mutex{},
 		nil,
 		0,
+		size,
 	}
 	p.cond = sync.NewCond(p.nextround)
 	return p
@@ -44,11 +46,9 @@ func NewNeuParallel() *NeuParallel {
 // NeuParallel methods
 //
 func (p *NeuParallel) attach(nnint NeuNetworkInterface, id int) *NeuRunner {
-	b := nnint.getTunables().batchsize
-	X := newMatrix(b, nnint.getIsize())
-	Y := newMatrix(b, nnint.getCoutput().size)
+	trwin := NewTreamWin(p.size, nnint)
+	r := &NeuRunner{nnint: nnint, p: p, trwin: trwin, id: id}
 
-	r := &NeuRunner{nnint: nnint, p: p, Xb: X, Yb: Y, id: id}
 	r.newrand = rand.New(rand.NewSource(int64((id + 1) * 100)))
 	r.newrand.Seed(int64(id))
 
@@ -95,10 +95,7 @@ func (p *NeuParallel) compute() {
 // NeuRunner methods
 //
 func (r *NeuRunner) addSample(xvec []float64, yvec []float64) {
-	assert(r.i < len(r.Xb))
-	copyVector(r.Xb[r.i], xvec)
-	copyVector(r.Yb[r.i], yvec)
-	r.i++
+	r.trwin.addSample(xvec, yvec)
 }
 
 func (r *NeuRunner) run() {
@@ -120,17 +117,17 @@ func (r *NeuRunner) run() {
 		r.p.nextround.Unlock()
 
 		// compute
-		for r.j < r.i {
-			r.nnint.TrainStep(r.Xb[r.j], r.Yb[r.j])
-			r.j++
+		for r.trained < r.trwin.getSidx()+r.trwin.getSize() {
+			r.nnint.TrainStep(r.trwin.getXvec(r.trained), r.trwin.getYvec(r.trained))
+			r.trained++
 		}
-		if r.i == b {
+		if r.trained-r.fixed == b {
 			r.nnint.fixGradients(b)
 			r.nnint.fixWeights(b)
-			r.i, r.j = 0, 0
+			r.fixed = r.trained
 			// optionally:
 			r.nnint.reForward()
-			r.avgcost += r.nnint.costfunction(r.Yb[b-1])
+			r.avgcost += r.nnint.costfunction(r.trwin.getYvec(r.trained - 1))
 		}
 		r.step++
 		// signal the parallel parent

@@ -17,7 +17,7 @@ const (
 
 //===========================================================================
 //
-// stream and its most popular/trivial impl
+// training stream and its impl-s
 //
 //===========================================================================
 type TtpStream interface {
@@ -26,12 +26,58 @@ type TtpStream interface {
 	getSidx() int
 }
 
+//
 // wraps vanilla array to implement TtpStream interface
+//
 type TtpArr [][]float64
 
 func (Xs TtpArr) getXvec(i int) []float64 { return Xs[i] }
 func (Xs TtpArr) getSize() int            { return len(Xs) }
 func (Xs TtpArr) getSidx() int            { return 0 }
+
+//
+// rightmost window of a given size "into" a stream
+//
+type TreamWin struct {
+	Xs      [][]float64
+	Ys      [][]float64
+	leftidx int
+	len     int
+}
+
+func NewTreamWin(size int, nn NeuNetworkInterface) *TreamWin {
+	b := nn.getTunables().batchsize
+	assert((size/b)*b == size)
+
+	Xs := newMatrix(size, nn.getIsize())
+	Ys := newMatrix(size, nn.getCoutput().size)
+	return &TreamWin{Xs: Xs, Ys: Ys}
+}
+func (trwin *TreamWin) getXvec(i int) []float64 {
+	assert(i-trwin.leftidx < trwin.len)
+	return trwin.Xs[i-trwin.leftidx]
+}
+func (trwin *TreamWin) getSize() int { return trwin.len }
+func (trwin *TreamWin) getSidx() int { return trwin.leftidx }
+
+func (trwin *TreamWin) addSample(xvec []float64, yvec []float64) {
+	if trwin.len < len(trwin.Xs) {
+		copyVector(trwin.Xs[trwin.len], xvec)
+		copyVector(trwin.Ys[trwin.len], yvec)
+		trwin.len++
+		return
+	}
+	copy(trwin.Xs, trwin.Xs[1:])
+	copyVector(trwin.Xs[trwin.len-1], xvec)
+	copy(trwin.Ys, trwin.Ys[1:])
+	copyVector(trwin.Ys[trwin.len-1], yvec)
+	trwin.leftidx++
+
+}
+func (trwin *TreamWin) getYvec(i int) []float64 {
+	assert(i-trwin.leftidx < trwin.len)
+	return trwin.Ys[i-trwin.leftidx]
+}
 
 //===========================================================================
 //

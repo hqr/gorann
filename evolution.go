@@ -1,3 +1,9 @@
+//==================================================================================
+//
+// Natural Evolution Strategies
+// http://www.jmlr.org/papers/volume15/wierstra14a/wierstra14a.pdf
+//
+//==================================================================================
 package gorann
 
 import (
@@ -13,10 +19,10 @@ type EvoTunables struct {
 	momentum          float64 // momentum
 	hireward, hialpha float64 // high(er) reward threshold and the corresponding learning rate (evolution only)
 	rewd              float64 // reward delta - the reward diff btw noise and -noise applied to weights
-	nperturb          int     // half the number of the NN weight perturbations aka jitters (evolution only)
+	nperturb          int     // half the number of the NN weight fluctuations aka jitters (evolution only)
 	sparsity          int     // jitter sparsity: % weights that get jittered = 100 - sparsity
 	jinflate          int     // inflate an already generated gaussian noise (jitter)
-	rewdup            int     // reward delta doubling period (the diff between err and -err perturbations)
+	rewdup            int     // reward delta doubling period (the diff between err and -err fluctuations)
 }
 
 type Evolution struct {
@@ -115,7 +121,7 @@ func (evo *Evolution) backpropGradients() {
 
 	noisycube := evo.gnoise[l]
 	//
-	// estimate the rewards (== -cost) for all "positive" and "negative" perturbations
+	// estimate the rewards (== -cost) for all "positive" and "negative" fluctuations
 	//
 	for jj, j := 0, 0; j < evo.tunables.nperturb; j++ {
 		addMatrixElem(layer.weights, noisycube[jj])

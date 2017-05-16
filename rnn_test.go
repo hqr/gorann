@@ -23,9 +23,9 @@ func Test_pcavg(t *testing.T) {
 		Ys[i][0] = (Xs[iprev][0] + Xs[i][0]) / 2
 	}
 
-	converged := 0
 	ttp := &TTP{nn: rnn, resultset: Ys[:ntrain+ngrad], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
-	for converged == 0 {
+	var cnv int
+	for cnv = 0; cnv == 0; {
 		for i := 0; i < ntrain+ngrad; i++ {
 			k := i - 1
 			if i == 0 { // wrap around
@@ -34,14 +34,14 @@ func Test_pcavg(t *testing.T) {
 			ffill(i, k)
 		}
 		if cli.checkgrad && ttp.sequential && rnn.tunables.batchsize > 1 {
-			converged = ttp.Train(TtpArr(Xs[:ntrain]))
+			cnv = ttp.Train(TtpArr(Xs[:ntrain]))
 			l := rand.Int31n(int32(rnn.lastidx))
 			layer := rnn.layers[l]
 			next := layer.next
 			i, j := rand.Int31n(int32(layer.size)), rand.Int31n(int32(next.size))
 			ttp.trainAndCheckGradients(TtpArr(Xs), ntrain, ntrain+ngrad, int(l), int(i), int(j))
 		} else {
-			converged = ttp.Train(TtpArr(Xs[:ntrain+ngrad]))
+			cnv = ttp.Train(TtpArr(Xs[:ntrain+ngrad]))
 		}
 	}
 	mse := 0.0
@@ -55,7 +55,7 @@ func Test_pcavg(t *testing.T) {
 		fmt.Printf("(%.2f + %.2f)/2 -> %.2f : %.2f\n", Xs[j-1][0], Xs[j][0], avec[0], Ys[j][0])
 	}
 	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.getNbprops()/1000)
-	if converged&ConvergedMaxBackprops > 0 {
+	if cnv&ConvergedMaxBackprops > 0 {
 		t.Errorf("reached the maximum number of back propagations (%dK)\n", rnn.getNbprops()/1000)
 	}
 }
@@ -77,9 +77,9 @@ func Test_emavg(t *testing.T) {
 		Xs[i][0] = rand.Float64()
 		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[iprev][0]
 	}
-	converged := 0
 	ttp := &TTP{nn: rnn, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 1E-5, sequential: true}
-	for converged == 0 {
+	var cnv int
+	for cnv = 0; cnv == 0; {
 		for i := 0; i < ntrain; i++ {
 			k := i - 1
 			if i == 0 { // wrap around
@@ -87,7 +87,7 @@ func Test_emavg(t *testing.T) {
 			}
 			ffill(i, k)
 		}
-		converged = ttp.Train(TtpArr(Xs[:ntrain]))
+		cnv = ttp.Train(TtpArr(Xs[:ntrain]))
 	}
 	mse := 0.0
 	for i := 0; i < ntest; i++ {
@@ -100,8 +100,8 @@ func Test_emavg(t *testing.T) {
 		fmt.Printf("%.1f*%.2f + %.1f*%.2f -> %.2f : %.2f\n", alph, Xs[j][0], (1 - alph), Ys[j-1][0], avec[0], Ys[j][0])
 	}
 	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.getNbprops()/1000)
-	if converged&ConvergedCost == 0 {
-		t.Errorf("failed to converge on cost (%d, %e)\n", converged, ttp.maxcost)
+	if cnv&ConvergedCost == 0 {
+		t.Errorf("failed to converge on cost (%d, %e)\n", cnv, ttp.maxcost)
 	}
 }
 
@@ -127,10 +127,9 @@ func Test_histpoly(t *testing.T) {
 		Ys[i][0] = alph*Xs[i][0] + (1-alph)*Ys[iprev][0]*(1-Xs[iprev][1])
 		Ys[i][1] = alph*(1-Ys[iprev][1])*Xs[i][1] + (1-alph)*Xs[iprev][0]
 	}
-
-	converged := 0
 	ttp := &TTP{nn: rnn, resultset: Ys[:ntrain], maxbackprops: 1E7, maxcost: 1E-4, sequential: true}
-	for converged == 0 {
+	var cnv int
+	for cnv = 0; cnv == 0; {
 		for i := 0; i < ntrain; i++ {
 			k := i - 1
 			if i == 0 { // wrap around to maintain the sequence in order
@@ -138,7 +137,7 @@ func Test_histpoly(t *testing.T) {
 			}
 			ffill(i, k)
 		}
-		converged = ttp.Train(TtpArr(Xs[:ntrain]))
+		cnv = ttp.Train(TtpArr(Xs[:ntrain]))
 	}
 	mse := 0.0
 	for i := 0; i < ntest; i++ {
@@ -151,8 +150,8 @@ func Test_histpoly(t *testing.T) {
 		fmt.Printf(" -> %3.2v : %3.2v\n", avec, Ys[j])
 	}
 	fmt.Printf("mse %.5f (nbp %dK)\n", mse/4, rnn.getNbprops()/1000)
-	if converged&ConvergedCost == 0 {
-		t.Errorf("failed to converge on cost (%d, %e)\n", converged, ttp.maxcost)
+	if cnv&ConvergedCost == 0 {
+		t.Errorf("failed to converge on cost (%d, %e)\n", cnv, ttp.maxcost)
 	}
 }
 
@@ -245,9 +244,7 @@ func nonPoly_R2R2(t *testing.T, ffill func(i, iprev int, Xs, Ys [][]float64)) {
 		rnn := nntestLimited(cli.lessrnn)
 		ttp = &TTP{nn: rnn, resultset: Ys[:ntrain], maxbackprops: 1E7, sequential: true}
 	}
-
-	converged := 0
-	for converged == 0 {
+	for cnv := 0; cnv == 0; {
 		for i := 0; i < ntrain; i++ {
 			k := i - 1
 			if i == 0 { // wrap around to maintain the sequence in order
@@ -255,7 +252,7 @@ func nonPoly_R2R2(t *testing.T, ffill func(i, iprev int, Xs, Ys [][]float64)) {
 			}
 			ffill(i, k, Xs, Ys)
 		}
-		converged = ttp.Train(TtpArr(Xs[:ntrain]))
+		cnv = ttp.Train(TtpArr(Xs[:ntrain]))
 	}
 	mse := 0.0
 	for i := 0; i < ntest; i++ {

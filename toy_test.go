@@ -1,6 +1,3 @@
-//
-// courtesy of [https://blog.openai.com/evolution-strategies]
-//
 package gorann
 
 import (
@@ -10,98 +7,54 @@ import (
 	"testing"
 )
 
-func fn_nespy(w []float64, solution []float64) float64 {
-	// reward = -np.sum(np.square(solution - w))
-	return -normL2VectorSquared(solution, w)
-}
+//==================================================================================
+//
+// Evolution: the most basic test
+// see also: http://www.jmlr.org/papers/volume15/wierstra14a/wierstra14a.pdf
+//
+//==================================================================================
+var etu = &EvoTunables{}
+var constant = []float64{math.Pi / 5, -math.E / 3, math.Phi / 2} // normalized
+var _constant = func(xvec []float64) []float64 { return constant }
 
-func Test_nespy(t *testing.T) {
+func Test_constant(t *testing.T) {
 	rand.Seed(0)
-	// hyperparameters
-	var npop = 50     // population size
-	var sigma = 0.1   // noise standard deviation
-	var alpha = 0.001 // learning rate
+	input := NeuLayerConfig{size: 3}
+	hidden := NeuLayerConfig{"tanh", 9}
+	output := NeuLayerConfig{"identity", 3}
 
-	// start the optimization
-	var solution = []float64{0.5, 0.1, -0.3}
+	// (un)comment, to use either GD or Evolution
+	// tu := &NeuTunables{gdalgname: ADAM, batchsize: 10, winit: Xavier}
+	// nn := NewNeuNetwork(input, hidden, 2, output, tu)
+	tu := &NeuTunables{batchsize: 10, winit: Xavier}
+	etu = &EvoTunables{
+		NeuTunables: *tu,
+		sigma:       0.1,   // normal-noise(0, sigma)
+		momentum:    0.2,   //
+		hireward:    5.0,   // diff (in num stds) that warrants a higher learning rate
+		hialpha:     0.1,   //
+		rewd:        0.001, //
+		rewdup:      10,    // reward delta doubling period
+		nperturb:    64,    // half the number of the NN weight fluctuations aka jitters
+		sparsity:    0,     // noise matrix sparsity (%)
+		jinflate:    4}     // gaussian noise inflation ratio, to speed up evolution
+	nn := NewEvolution(input, hidden, 3, output, etu, 1)
 
-	w := newVector(3, 0.0, 1.0, "normal")
-	for i := 0; i < 300; i++ {
-		if i%20 == 0 {
-			fmt.Printf("%d, %.5v, %.5f\n", i, w, fn_nespy(w, solution))
-		}
-
-		N := newMatrix(npop, 3, 0.0, 1.0, "normal")
-		R := newVector(npop)
-
-		for j := 0; j < npop; j++ {
-			// w_try := w + sigma*N[j]
-			nj := cloneVector(N[j])
-			mulVectorNum(nj, sigma)
-			w_try := cloneVector(w)
-			addVectorElem(w_try, nj)
-			R[j] = fn_nespy(w_try, solution) // evaluate the jittered version
-		}
-
-		// standardize the rewards to have a gaussian distribution
-		// A = (R - np.mean(R)) / np.std(R)
-		A := cloneVector(R)
-		standardizeVectorZscore(A)
-		// perform the parameter update. The matrix multiply below
-		// is just an efficient way to sum up all the rows of the noise matrix N,
-		// where each row N[j] is weighted by A[j]
-		// w = w + alpha/(npop*sigma) * np.dot(N.T, A)
-		lrate := alpha / (float64(npop) * sigma)
-		for j := 0; j < npop; j++ {
-			mulVectorNum(N[j], lrate*A[j])
-			addVectorElem(w, N[j])
-		}
+	// test
+	Xs := newMatrix(1000, 3, 0.0, 1.0)
+	ttp := &TTP{nn: nn, resultvalcb: _constant, maxcost: 1E-4, maxbackprops: 1E4}
+	for cnv := 0; cnv == 0; {
+		cnv = ttp.Train(TtpArr(Xs))
 	}
-}
-
-func Test_nespy_alt(t *testing.T) {
-	rand.Seed(0)
-	// hyperparameters
-	var npop = 50     // population size
-	var sigma = 0.1   // noise standard deviation
-	var alpha = 0.001 // learning rate
-
-	// start the optimization
-	var solution = []float64{0.5, 0.1, -0.3}
-	var rThresh = 10.0
-	w := newVector(3, 0.0, 1.0, "normal")
-	for i := 0; i < 600; i++ {
-		if i%20 == 0 {
-			fmt.Printf("%d, %.5v, %.5f\n", i, w, fn_nespy(w, solution))
-		}
-
-		N := newMatrix(npop, 3, 0.0, 1.0, "normal")
-		R := newVector(npop)
-
-		for j := 0; j < npop; j++ {
-			// w_try := w + sigma*N[j]
-			mulVectorNum(N[j], sigma)
-			w_try := cloneVector(w)
-			addVectorElem(w_try, N[j])
-			R[j] = fn_nespy(w_try, solution) // evaluate the jittered version
-		}
-
-		// standardize the rewards to have a gaussian distribution
-		// A = (R - np.mean(R)) / np.std(R)
-		A := cloneVector(R)
-		mean, std := standardizeVectorZscore(A)
-		for j := 0; j < npop; j++ {
-			// prioritize those parameter updates that yield bigger rewards
-			if A[j] > mean+rThresh*std {
-				mulVectorNum(N[j], 0.1*A[j])
-				addVectorElem(w, N[j])
-				rThresh += 0.5
-			} else {
-				mulVectorNum(N[j], alpha*A[j])
-				addVectorElem(w, N[j])
-			}
-		}
+	var mse float64
+	Xs = newMatrix(8, 3, 0.0, 1.0)
+	for i := 0; i < 8; i++ {
+		y2 := _constant(Xs[i])
+		y1 := nn.Predict(Xs[i])
+		mse += nn.costfunction(y2)
+		fmt.Printf("%.3f : %.3f\n", y1, y2)
 	}
+	fmt.Printf("mse %.3e\n", mse/8)
 }
 
 //==================================================================================
@@ -158,15 +111,6 @@ func hart6_fill(Xs [][]float64) {
 }
 
 func Test_hartmann(t *testing.T) {
-	/*xvec := newVector(6)
-	for i := 0; i < 1E7; i++ {
-		fillVector(xvec, 0.0, 1.0)
-		y := fn_hartmann(xvec)
-		if y[0] > 1 {
-			fmt.Printf("%.3f: %.5f\n", y, xvec)
-		}
-	}
-	fmt.Printf("optimum : %.5f\n", fn_hartmann(hart6_opt))*/
 	input := NeuLayerConfig{size: 6}
 	hidden := NeuLayerConfig{"tanh", input.size * 3}
 	output := NeuLayerConfig{"sigmoid", 1}
@@ -179,7 +123,7 @@ func Test_hartmann(t *testing.T) {
 		hialpha:     0.01,          //
 		rewd:        0.001,         // FIXME: consider using reward / 1000
 		rewdup:      rclr.coperiod, // reward delta doubling period
-		nperturb:    64,            // half the number of the NN weight perturbations aka jitters
+		nperturb:    64,            // half the number of the NN weight fluctuations aka jitters
 		sparsity:    10,            // noise matrix sparsity (%)
 		jinflate:    2}             // gaussian noise inflation ratio, to speed up evolution
 
@@ -195,12 +139,11 @@ func Test_hartmann(t *testing.T) {
 	// henceforth, the usual training (regression) on random samples
 	//
 	Xs := newMatrix(10000, evo.getIsize())
-	converged := 0
 	prevmax := 0.0
 	ttp := &TTP{nn: evo, resultvalcb: fn_hartmann, pct: 10, maxbackprops: 1E7, repeat: 3}
-	for converged == 0 {
+	for cnv := 0; cnv == 0; {
 		hart6_fill(Xs)
-		converged = ttp.Train(TtpArr(Xs))
+		cnv = ttp.Train(TtpArr(Xs))
 
 		for i := 0; i < len(Xs); i++ {
 			avec := nn.nnint.forward(hart6_opt)

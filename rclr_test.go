@@ -12,6 +12,8 @@ import (
 	"testing"
 )
 
+const rclr_NumSteps = 1E4
+
 // types
 type Initiator struct {
 	evo *Evolution
@@ -50,32 +52,33 @@ type RCLR struct {
 	//
 	// cluster-wide tunables
 	//
-	svcrate                float64 // service rate
-	scorehigh              float64 // scoring thresholds that control inter-initiator weights exchange
-	ni, nt, nsteps, copies int     // numbers of initiators and targets, number of steps (epochs), number of replicas
-	hisize                 int     // target (selection) history size
-	coperiod               int     // collaboration = scoring period: number of steps (epochs)
-	idelay, tdelay         int     // initiator and target "delay" as far as the history of the target /selections/
+	svcrate                   float64 // service rate
+	scorehigh                 float64 // scoring thresholds that control inter-initiator weights exchange
+	ni, nt, batchsize, copies int     // numbers of initiators and targets, batchsize, number of replicas
+	hisize                    int     // target (selection) history size
+	coperiod                  int     // collaboration = scoring period: number of steps (epochs)
+	idelay, tdelay            int     // initiator and target "delay" as far as the history of the target /selections/
 	//
 	fnlatency func(h []float64) float64
 }
 
 func init() {
-	p := NewNeuParallel()
 	rclr = &RCLR{
-		p,
+		nil,
 		//
 		// cluster-wide tunables
 		//
-		1.5,            // service rate: num requests target can handle during one epoch step
-		123456,         //1.3, // FIXME: disabled: high scoring thresholds that controls NN copying between initiators
-		10, 10, 1E4, 3, // numbers of initiators and targets, num steps, replicas
+		1.5,           // service rate: num requests target can handle during one epoch step
+		123456,        //1.3, // FIXME: disabled: high scoring thresholds that controls NN copying between initiators
+		10, 10, 10, 3, // ## initiators and targets, NN batchsize, # replicas
 		30,          //	target history size - selection counts that each target keeps back in time
 		200,         // collaboration = scoring period: number of steps (epochs)
 		1,           // initiator "sees" the history delayed by so many epochs
 		0,           // target owns the presense
 		fn5_latency, //
 	}
+	rclr.p = NewNeuParallel(rclr.batchsize * 100)
+
 	ivec = make([]*Initiator, rclr.ni)
 	ivecsorted = make([]*Initiator, rclr.ni)
 	tvec = make([]*Target, rclr.nt)
@@ -98,7 +101,7 @@ func Test_rcluster(t *testing.T) {
 	var yvec = []float64{0}
 	scLat, scSel, scCost := newVector(rclr.ni), newVector(rclr.ni), newVector(rclr.ni)
 	for {
-		if rclr.p.step > rclr.nsteps {
+		if rclr.p.step > rclr_NumSteps {
 			break
 		}
 		compute_I() // I: select 3 rep-holding Ts, compute latencies, select the NN-estimated min
@@ -146,7 +149,7 @@ func construct_I() {
 		hidden := NeuLayerConfig{"sigmoid", input.size * 2}
 		// output := NeuLayerConfig{"identity", 1}
 		output := NeuLayerConfig{"sigmoid", 1}
-		tu := &NeuTunables{gdalgname: ADAM, batchsize: 10, winit: XavierNewRand}
+		tu := &NeuTunables{gdalgname: ADAM, batchsize: rclr.batchsize, winit: XavierNewRand}
 		etu := &EvoTunables{
 			NeuTunables: *tu,
 			sigma:       0.01,          // normal-noise(0, sigma)
@@ -155,7 +158,7 @@ func construct_I() {
 			hialpha:     0.01,          //
 			rewd:        0.001,         // FIXME: consider using reward / 1000
 			rewdup:      rclr.coperiod, // reward delta doubling period
-			nperturb:    64,            // half the number of the NN weight perturbations aka jitters
+			nperturb:    64,            // half the number of the NN weight fluctuations aka jitters
 			sparsity:    10,            // noise matrix sparsity (%)
 			jinflate:    2}             // gaussian noise inflation ratio, to speed up evolution
 

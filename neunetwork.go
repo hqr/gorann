@@ -135,9 +135,18 @@ func (nn *NeuNetwork) initunables() {
 	if nn.tunables.batchsize == 0 {
 		nn.tunables.batchsize = DEFAULT_batchsize
 	}
-	if len(nn.tunables.costfname) == 0 {
-		nn.tunables.costfname = CostMse
+	// cost
+	if nn.tunables.costfunction == nil {
+		if len(nn.tunables.costfname) == 0 {
+			nn.tunables.costfname = CostMse
+		}
+		if nn.tunables.costfname == CostMse {
+			nn.tunables.costfunction = nn.CostMse
+		} else {
+			nn.tunables.costfunction = nn.CostCrossEntropy
+		}
 	}
+
 	// command-line: override defaults and hardcodings
 	if cli.alpha > 0 {
 		nn.tunables.alpha = cli.alpha
