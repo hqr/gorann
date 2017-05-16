@@ -16,19 +16,28 @@ type NeuNetworkInterface interface {
 	backpropGradients()
 	fixGradients(batchsize int)
 	fixWeights(batchsize int)
+	// global redirect, convenience
+	Predict(xvec []float64) []float64
+	TrainStep(xvec []float64, yvec []float64)
 	// cost
 	costfunction(yvec []float64) (cost float64)
+	costl2reg() (creg float64)
+	costl2_weightij(l int, i int, j int, eps float64) float64
 	// aux
+	normalizeY(yvec []float64) []float64
 	populateInput(xvec []float64, normalize bool)
 	populateDeltas(deltas []float64)
+	initXavier(newrand *rand.Rand)
 	// Get accessors
 	getCinput() *NeuLayerConfig
 	getCoutput() *NeuLayerConfig
+	getLayer(l int) *NeuLayer
 	getIsize() int
 	getHsize() int
 	getHnum() int
 	getTunables() *NeuTunables
 	getCallbacks() *NeuCallbacks
+	getNbprops() int
 }
 
 //
@@ -102,7 +111,7 @@ func NewNeuNetwork(cinput NeuLayerConfig, chidden NeuLayerConfig, numhidden int,
 		layer.init(nn)
 	}
 	if nn.tunables.winit == Xavier {
-		nn.initXavier()
+		nn.initXavier(nil)
 	}
 	// other useful tunables
 	// nn.tunables.gdalgscopeall = true
@@ -126,9 +135,18 @@ func (nn *NeuNetwork) initunables() {
 	if nn.tunables.batchsize == 0 {
 		nn.tunables.batchsize = DEFAULT_batchsize
 	}
-	if len(nn.tunables.costfname) == 0 {
-		nn.tunables.costfname = CostMse
+	// cost
+	if nn.tunables.costfunction == nil {
+		if len(nn.tunables.costfname) == 0 {
+			nn.tunables.costfname = CostMse
+		}
+		if nn.tunables.costfname == CostMse {
+			nn.tunables.costfunction = nn.CostMse
+		} else {
+			nn.tunables.costfunction = nn.CostCrossEntropy
+		}
 	}
+
 	// command-line: override defaults and hardcodings
 	if cli.alpha > 0 {
 		nn.tunables.alpha = cli.alpha
@@ -221,7 +239,7 @@ func (layer *NeuLayer) winit(tunables *NeuTunables) {
 }
 
 // Xavier et al at http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
-func (nn *NeuNetwork) initXavier() {
+func (nn *NeuNetwork) initXavier(newrand *rand.Rand) {
 	qsix := math.Sqrt(6)
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
@@ -230,7 +248,11 @@ func (nn *NeuNetwork) initXavier() {
 		d := u * 2
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
-				layer.weights[i][j] = d*rand.Float64() - u
+				if newrand == nil {
+					layer.weights[i][j] = d*rand.Float64() - u
+				} else {
+					layer.weights[i][j] = d*newrand.Float64() - u
+				}
 			}
 		}
 	}
@@ -241,8 +263,8 @@ func (nn *NeuNetwork) reset() {
 	gdalgname := nn.tunables.gdalgname
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
-		fillVector(layer.avec, 0)
-		fillVector(layer.zvec, 0)
+		fillVector(layer.avec, 0.0)
+		fillVector(layer.zvec, 0.0)
 		if layer.size > layer.config.size {
 			layer.avec[layer.config.size] = 1
 		}
@@ -273,11 +295,22 @@ func (nn *NeuNetwork) copyNetwork(from *NeuNetwork) {
 	}
 }
 
+func (nn *NeuNetwork) normalizeY(yvec []float64) []float64 {
+	var ynorm = yvec
+	cb := nn.getCallbacks()
+	if cb != nil && cb.normcbY != nil {
+		ynorm = cloneVector(yvec) // FIXME: preallocate
+		cb.normcbY(ynorm)
+	}
+	return ynorm
+}
+
 func (nn *NeuNetwork) populateInput(xvec []float64, normalize bool) {
 	var xnorm = xvec
-	if normalize && nn.callbacks != nil && nn.callbacks.normcbX != nil {
+	cb := nn.getCallbacks()
+	if normalize && cb != nil && cb.normcbX != nil {
 		xnorm = cloneVector(xvec)
-		nn.callbacks.normcbX(xnorm)
+		cb.normcbX(xnorm)
 	}
 	ilayer := nn.layers[0]
 	copy(ilayer.avec, xnorm) // copies up to the smaller num elems, bias remains intact
@@ -446,9 +479,38 @@ func (nn *NeuNetwork) fixWeights(batchsize int) {
 	}
 }
 
+//============================================================
+//
+// training and prediction: externally visible methods
+//
+//============================================================
+func (nn *NeuNetwork) Predict(xvec []float64) []float64 {
+	yvec := nn.nnint.forward(xvec)
+	var ynorm = yvec
+	cb := nn.getCallbacks()
+	if cb != nil && cb.denormcbY != nil {
+		ynorm = cloneVector(yvec)
+		cb.denormcbY(ynorm)
+	}
+	return ynorm
+}
+
+//
+// single step in both directions: forward and back
+//
+func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
+	nn.nnint.forward(xvec)
+	ynorm := nn.nnint.normalizeY(yvec)
+	nn.nnint.computeDeltas(ynorm)
+	nn.nnint.backpropDeltas()
+	nn.nnint.backpropGradients()
+}
+
+//============================================================
 //
 // Get accessors
 //
+//============================================================
 func (nn *NeuNetwork) getCinput() *NeuLayerConfig {
 	return &nn.cinput
 }
@@ -459,6 +521,10 @@ func (nn *NeuNetwork) getIsize() int {
 
 func (nn *NeuNetwork) getCoutput() *NeuLayerConfig {
 	return &nn.coutput
+}
+
+func (nn *NeuNetwork) getLayer(l int) *NeuLayer {
+	return nn.layers[l]
 }
 
 func (nn *NeuNetwork) getTunables() *NeuTunables {
@@ -477,9 +543,15 @@ func (nn *NeuNetwork) getHnum() int {
 	return len(nn.layers) - 2
 }
 
+func (nn *NeuNetwork) getNbprops() int {
+	return nn.nbackprops
+}
+
+//============================================================
 //
 // NeuLayer methods
 //
+//============================================================
 func (layer *NeuLayer) weightij(i int, j int) float64 {
 	nn := layer.nn
 	alpha := nn.tunables.alpha
@@ -497,10 +569,10 @@ func (layer *NeuLayer) weightij_Adagrad(i int, j int) float64 {
 	eps := nn.tunables.eps
 
 	if layer.rmsgradient[i][j] == 0 {
-		layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
+		layer.rmsgradient[i][j] = pow2(layer.gradient[i][j])
 	} else {
 		alpha /= (math.Sqrt(layer.rmsgradient[i][j] + eps))
-		layer.rmsgradient[i][j] += math.Pow(layer.gradient[i][j], 2)
+		layer.rmsgradient[i][j] += pow2(layer.gradient[i][j])
 	}
 
 	weightij = weightij - alpha*layer.gradient[i][j]
@@ -515,14 +587,14 @@ func (layer *NeuLayer) weightij_Adadelta(i int, j int) float64 {
 	gamma, g1, eps := nn.tunables.gamma, 1-nn.tunables.gamma, nn.tunables.eps
 
 	if layer.rmsgradient[i][j] == 0 {
-		layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
+		layer.rmsgradient[i][j] = pow2(layer.gradient[i][j])
 		deltaij := alpha * layer.gradient[i][j]
-		layer.rmswupdates[i][j] = math.Pow(deltaij, 2)
+		layer.rmswupdates[i][j] = pow2(deltaij)
 	} else {
-		layer.rmsgradient[i][j] = gamma*layer.rmsgradient[i][j] + g1*math.Pow(layer.gradient[i][j], 2)
+		layer.rmsgradient[i][j] = gamma*layer.rmsgradient[i][j] + g1*pow2(layer.gradient[i][j])
 		alpha = math.Sqrt(layer.rmswupdates[i][j]+eps) / (math.Sqrt(layer.rmsgradient[i][j] + eps))
 		deltaij := alpha * layer.gradient[i][j]
-		layer.rmswupdates[i][j] = gamma*layer.rmswupdates[i][j] + g1*math.Pow(deltaij, 2)
+		layer.rmswupdates[i][j] = gamma*layer.rmswupdates[i][j] + g1*pow2(deltaij)
 	}
 
 	weightij = weightij - alpha*layer.gradient[i][j]
@@ -539,9 +611,9 @@ func (layer *NeuLayer) weightij_RMSprop(i int, j int) float64 {
 	gamma, g1, eps := nn.tunables.gamma, 1-nn.tunables.gamma, nn.tunables.eps
 
 	if layer.rmsgradient[i][j] == 0 {
-		layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
+		layer.rmsgradient[i][j] = pow2(layer.gradient[i][j])
 	} else {
-		layer.rmsgradient[i][j] = gamma*layer.rmsgradient[i][j] + g1*math.Pow(layer.gradient[i][j], 2)
+		layer.rmsgradient[i][j] = gamma*layer.rmsgradient[i][j] + g1*pow2(layer.gradient[i][j])
 		alpha /= (math.Sqrt(layer.rmsgradient[i][j] + eps))
 	}
 	weightij = weightij - alpha*layer.gradient[i][j]
@@ -557,11 +629,11 @@ func (layer *NeuLayer) weightij_ADAM(i int, j int) float64 {
 	weightij := layer.weights[i][j]
 
 	if layer.rmsgradient[i][j] == 0 {
-		layer.rmsgradient[i][j] = math.Pow(layer.gradient[i][j], 2)
+		layer.rmsgradient[i][j] = pow2(layer.gradient[i][j])
 		layer.avegradient[i][j] = layer.gradient[i][j]
 	} else {
 		layer.avegradient[i][j] = nn.tunables.beta1*layer.avegradient[i][j] + (1-nn.tunables.beta1)*layer.gradient[i][j]
-		layer.rmsgradient[i][j] = nn.tunables.beta2*layer.rmsgradient[i][j] + (1-nn.tunables.beta2)*math.Pow(layer.gradient[i][j], 2)
+		layer.rmsgradient[i][j] = nn.tunables.beta2*layer.rmsgradient[i][j] + (1-nn.tunables.beta2)*pow2(layer.gradient[i][j])
 		alpha *= math.Sqrt(1-nn.tunables.beta2_t) / (1 - nn.tunables.beta1_t)
 		div := math.Sqrt(layer.rmsgradient[i][j]) + nn.tunables.eps
 		weightij = weightij - alpha*layer.avegradient[i][j]/div

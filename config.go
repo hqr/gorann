@@ -64,9 +64,10 @@ const (
 
 // weight initialization
 const (
-	Random_1105 = 0
-	Random_11   = 1
-	Xavier      = 2
+	Random_1105   = 0 // default, must be zero
+	Random_11     = 1
+	Xavier        = 2
+	XavierNewRand = 3
 )
 
 // neural network tunables - a superset
@@ -84,12 +85,14 @@ type NeuTunables struct {
 	eta        float64
 	neta       float64
 	lambda     float64 // regularization lambda (default = 0)
+	// cost
+	costfname    string
+	costfunction func(xvec []float64) float64
 	// other config
-	costfname     string // half squared euclidean distance (L2 norm) aka LMS | Logistic
 	gdalgname     string // gradient descent optimization algorithm (see above)
 	gdalgscopeall bool   // whether to apply optimization algorithm to all layers or just the one facing output
 	batchsize     int    // gradient descent: BatchSGD | BatchTrainingSet | minibatch
-	winit         int    // weight initialization: Ranom_1105 (default) | Random_11 | Xavier
+	winit         int    // weight initialization: Ranom_1105 (default) | Random_11 | Xavier...
 }
 
 //

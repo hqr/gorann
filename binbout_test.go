@@ -100,10 +100,9 @@ func xornbits(t *testing.T, nn *NeuNetwork) {
 		}
 	}
 	fillrandom()
-	converged := 0
 	ttp := &TTP{nn: nn, resultvalcb: _xornbits, pct: 50, maxbackprops: 2E6}
-	for converged == 0 {
-		converged = nn.Train(Xs, ttp)
+	for cnv := 0; cnv == 0; {
+		cnv = ttp.Train(TtpArr(Xs))
 	}
 	var crossen, mse float64
 	// try the trained network on some new data
@@ -146,6 +145,32 @@ func Test_transform_56_2(t *testing.T) {
 	output := NeuLayerConfig{"sigmoid", 16}
 	nn := NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: Xavier})
 	transformBits(t, nn)
+}
+
+func Test_transform_56_2_evo(t *testing.T) {
+	rand.Seed(0)
+	input := NeuLayerConfig{size: 16}
+	hidden := NeuLayerConfig{"sigmoid", 56}
+	output := NeuLayerConfig{"sigmoid", 16}
+	//
+	// nn := NewNeuNetwork(input, hidden, 2, output, &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: Xavier})
+	//
+	tu := &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: Xavier}
+	etu := &EvoTunables{
+		NeuTunables: *tu,
+		sigma:       0.1,           // normal-noise(0, sigma)
+		momentum:    0.1,           //
+		hireward:    10.0,          // diff (in num stds) that warrants a higher learning rate
+		hialpha:     0.1,           //
+		rewd:        0.001,         // FIXME: consider using reward / 1000
+		rewdup:      rclr.coperiod, // reward delta doubling period
+		nperturb:    256,           // half the number of the NN weight fluctuations aka jitters
+		sparsity:    50,            // noise matrix sparsity (%)
+		jinflate:    2}             // gaussian noise inflation ratio, to speed up evolution
+
+	evo := NewEvolution(input, hidden, 2, output, etu, 0)
+
+	transformBits(t, &evo.NeuNetwork)
 }
 
 func Test_transform_48_2(t *testing.T) {
@@ -210,10 +235,9 @@ func transformBits(t *testing.T, nn *NeuNetwork) {
 		}
 	}
 	fillrandom()
-	converged := 0
 	ttp := &TTP{nn: nn, resultvalcb: _transformBits, pct: 50, maxbackprops: 1E7}
-	for converged == 0 {
-		converged = nn.Train(Xs, ttp)
+	for cnv := 0; cnv == 0; {
+		cnv = ttp.Train(TtpArr(Xs))
 	}
 	var crossen, mse float64
 	// try the trained network on some new data
@@ -272,9 +296,9 @@ func Test_classify(t *testing.T) {
 		Xs[i][0] = float64(rand.Int31n(maxint))
 		Xs[i][1] = float64(rand.Int31n(maxint))
 	}
-	converged := 0
-	for converged == 0 {
-		converged = nn.Train(Xs, ttp)
+	var cnv int
+	for cnv = 0; cnv == 0; {
+		cnv = ttp.Train(TtpArr(Xs))
 	}
 	var crossen, mse float64
 	num := 8
@@ -296,8 +320,8 @@ func Test_classify(t *testing.T) {
 		fmt.Printf("%3v ^ %3v (%1d) -> %.1v : %v\n", xvec[0], xvec[1], k, avec, yvec)
 	}
 	fmt.Printf("cross-entropy %.5f, mse %.5f\n", crossen/float64(num), mse/float64(num))
-	if converged&ConvergedMaxBackprops > 0 {
-		t.Errorf("reached the maximum number of back propagations (%d)\n", nn.nbackprops)
+	if cnv&ConvergedMaxBackprops > 0 {
+		t.Errorf("reached the maximum number of back propagations (%d)\n", nn.getNbprops())
 	}
 }
 
@@ -344,10 +368,9 @@ func crc32cbytes(t *testing.T, nn *NeuNetwork) {
 		}
 	}
 	fillrandombytes()
-	converged := 0
 	ttp := &TTP{nn: nn, resultvalcb: _crc32cbytes, pct: 50, maxbackprops: 1E7}
-	for converged == 0 {
-		converged = nn.Train(Xs, ttp)
+	for cnv := 0; cnv == 0; {
+		cnv = ttp.Train(TtpArr(Xs))
 	}
 	var mse float64
 	// try the trained network on some new data

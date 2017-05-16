@@ -26,13 +26,7 @@ func assert(cond bool, args ...interface{}) {
 func newMatrix(rows, cols int, args ...interface{}) [][]float64 {
 	m := make([][]float64, rows)
 	for i := 0; i < rows; i++ {
-		if len(args) == 0 {
-			m[i] = newVector(cols)
-		} else if len(args) == 1 {
-			m[i] = newVector(cols, args[0])
-		} else if len(args) == 2 {
-			m[i] = newVector(cols, args[0], args[1])
-		}
+		m[i] = newVector(cols, args...)
 	}
 	return m
 }
@@ -57,10 +51,48 @@ func copyMatrix(dst [][]float64, src [][]float64) {
 	}
 }
 
+func addMatrixElem(dst [][]float64, src [][]float64) {
+	rows := len(src)
+	assert(rows == len(dst))
+	for r := 0; r < rows; r++ {
+		addVectorElem(dst[r], src[r])
+	}
+}
+
 func zeroMatrix(mat [][]float64) {
 	rows := len(mat)
 	for r := 0; r < rows; r++ {
-		fillVector(mat[r], 0)
+		fillVector(mat[r], 0.0)
+	}
+}
+
+func fillMatrixNormal(mat [][]float64, mean, std float64, sparsity int, newrand *rand.Rand) {
+	rows := len(mat)
+	cols := len(mat[0])
+	for r := 0; r < rows; r++ {
+		for c := 0; c < cols; c++ {
+			if sparsity == 0 || newrand.Intn(100) >= sparsity {
+				mat[r][c] = newrand.NormFloat64()*std + mean
+			} else {
+				mat[r][c] = mean
+			}
+		}
+	}
+}
+
+func reshuffleMatrix(dst [][]float64, src [][]float64) {
+	rows := len(src)
+	cols := len(src[0])
+	m := cols / 2
+	for r := 0; r < rows; r++ {
+		a := src[r][0]
+		copy(dst[r], src[r][1:])
+		dst[r][cols-1] = a
+		for j := 1; j < m; j++ {
+			a := dst[r][m-j]
+			dst[r][m-j] = dst[r][m+j]
+			dst[r][m+j] = a
+		}
 	}
 }
 
@@ -95,6 +127,13 @@ func ppMatrix(name string, mat [][]float64) {
 }
 */
 
+func mulMatrixNum(mat [][]float64, d float64) {
+	for r := 0; r < len(mat); r++ {
+		row := mat[r]
+		mulVectorNum(row, d)
+	}
+}
+
 func divMatrixNum(mat [][]float64, d float64) {
 	for r := 0; r < len(mat); r++ {
 		row := mat[r]
@@ -123,12 +162,39 @@ func normL2VectorSquared(avec []float64, bvec []float64) float64 {
 	edist := 0.0
 	for c := 0; c < cols; c++ {
 		if bvec == nil {
-			edist += math.Pow(avec[c], 2)
+			edist += pow2(avec[c])
 		} else {
-			edist += math.Pow(avec[c]-bvec[c], 2)
+			edist += pow2(avec[c] - bvec[c])
 		}
 	}
 	return edist
+}
+
+func meanVector(vec []float64) (mean float64) {
+	flen := float64(len(vec))
+	for c := 0; c < len(vec); c++ {
+		mean += vec[c]
+	}
+	mean /= flen
+	return
+}
+func meanStdVector(vec []float64) (mean, std float64) {
+	flen := float64(len(vec))
+	mean = meanVector(vec)
+	cpy := cloneVector(vec)
+	addVectorNum(cpy, -mean)
+	std = math.Sqrt(normL2VectorSquared(cpy, nil) / flen)
+	return
+}
+
+// z-score standardization
+func standardizeVectorZscore(vec []float64) (mean, std float64) {
+	flen := float64(len(vec))
+	mean = meanVector(vec)
+	addVectorNum(vec, -mean)
+	std = math.Sqrt(normL2VectorSquared(vec, nil) / flen)
+	divVectorNum(vec, std)
+	return
 }
 
 func normL1Vector(avec []float64, bvec []float64) float64 {
@@ -217,31 +283,58 @@ func subVectorElemAbs(dst []float64, src []float64) {
 
 func newVector(size int, args ...interface{}) []float64 {
 	v := make([]float64, size)
-	if len(args) == 0 {
-		return v
-	}
-	if len(args) == 1 {
+	fillVector(v, args...)
+	return v
+}
+
+func fillVector(v []float64, args ...interface{}) {
+	size := len(v)
+	switch len(args) {
+	case 0:
+		// do nothing
+	case 1:
 		f := args[0].(float64)
 		for i := 0; i < size; i++ {
 			v[i] = f
 		}
-		return v
-	}
-	// fill in with random values between spec-ed boundaries
-	assert(len(args) == 2)
-	left := args[0].(float64)
-	right := args[1].(float64)
-	assert(right > left)
-	d := right - left
-	for i := 0; i < size; i++ {
-		v[i] = d*rand.Float64() + left
-	}
-	return v
-}
+	case 2: // random uniformly distributed [left, right] values from the default source
+		left := args[0].(float64)
+		right := args[1].(float64)
+		assert(right > left)
+		d := right - left
+		for i := 0; i < size; i++ {
+			v[i] = d*rand.Float64() + left
+		}
+	case 3: // random normally distributed (mean, std) from the default source
+		dist := args[2].(string)
+		assert(dist == "normal")
+		mean := args[0].(float64)
+		std := args[1].(float64)
+		for i := 0; i < size; i++ {
+			v[i] = rand.NormFloat64()*std + mean
+		}
+	case 4: // random from the specified source
+		newrand := args[3].(*rand.Rand)
+		dist := args[2].(string)
+		if dist == "normal" { // from normal distribution (mean, std)
+			mean := args[0].(float64)
+			std := args[1].(float64)
+			for i := 0; i < size; i++ {
+				v[i] = newrand.NormFloat64()*std + mean
+			}
+		} else {
+			assert(dist == "") // uniformly distributed
+			left := args[0].(float64)
+			right := args[1].(float64)
+			assert(right > left)
+			d := right - left
+			for i := 0; i < size; i++ {
+				v[i] = d*newrand.Float64() + left
+			}
+		}
 
-func fillVector(vec []float64, x float64) {
-	for i := 0; i < len(vec); i++ {
-		vec[i] = x
+	default:
+		assert(false)
 	}
 }
 
@@ -310,4 +403,8 @@ func fmin(a float64, b float64) float64 {
 		return b
 	}
 	return a
+}
+
+func pow2(a float64) float64 {
+	return a * a
 }

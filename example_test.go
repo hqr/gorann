@@ -34,13 +34,12 @@ func ExampleF_xorbits() {
 	}
 	Xs := newMatrix(100, 2)
 	ttp := &TTP{nn: nn, resultvalcb: xorbits, repeat: 3, pct: 60, maxcost: 1E-3, maxbackprops: 1E7}
-	converged := 0
-	for converged == 0 {
+	for cnv := 0; cnv == 0; {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0] = float64(rand.Int31n(maxint))
 			Xs[i][1] = float64(rand.Int31n(maxint))
 		}
-		converged = nn.Train(Xs, ttp)
+		cnv = ttp.Train(TtpArr(Xs))
 	}
 	// test and print the results (expected output below)
 	var crossen, mse float64
@@ -79,13 +78,12 @@ func ExampleF_1() {
 	}
 	Xs := newMatrix(100, 2)
 	ttp := &TTP{nn: nn, resultvalcb: xorbits, pct: 90, maxcost: 1E-8, maxbackprops: 1E6}
-	converged := 0
 	for i := 0; i < len(Xs); i++ {
 		Xs[i][0] = float64(rand.Int31n(2))
 		Xs[i][1] = float64(rand.Int31n(2))
 	}
-	for converged == 0 {
-		converged = nn.Train(Xs, ttp)
+	for cnv := 0; cnv == 0; {
+		cnv = ttp.Train(TtpArr(Xs))
 	}
 	// test and print the results (expected output below)
 	var err, loss float64
@@ -121,13 +119,12 @@ func ExampleF_sumsquares() {
 	}
 	Xs := newMatrix(1000, 2)
 	ttp := &TTP{nn: nn, resultvalcb: sumsquares, repeat: 3, pct: 30, maxcost: 5E-7}
-	converged := 0
-	for converged == 0 {
+	for cnv := 0; cnv == 0; {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0] = rand.Float64() / 1.5
 			Xs[i][1] = rand.Float64() / 1.5
 		}
-		converged = nn.Train(Xs, ttp)
+		cnv = ttp.Train(TtpArr(Xs))
 	}
 	// use to estimate
 	var loss float64
@@ -177,12 +174,11 @@ func ExampleF_sumlogarithms() {
 	}
 	Xs := newMatrix(1000, 2)
 	ttp := &TTP{nn: nn, resultvalcb: sumlogarithms, repeat: 3, maxbackprops: 2E6}
-	var converged int
-	for converged == 0 {
+	for cnv := 0; cnv == 0; {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
 		}
-		converged = nn.Train(Xs, ttp)
+		cnv = ttp.Train(TtpArr(Xs))
 	}
 	var mse float64
 	for i := 0; i < 4; i++ {
@@ -196,11 +192,11 @@ func ExampleF_sumlogarithms() {
 	}
 	fmt.Printf("mse %.4e\n", mse/4)
 	// Output:
-	// log(0.456) + log(0.173) -> -2.447 : -2.538
-	// log(0.245) + log(0.146) -> -3.223 : -3.327
-	// log(0.756) + log(0.542) -> -0.787 : -0.892
-	// log(0.084) + log(0.412) -> -3.292 : -3.362
-	// mse 6.8764e-05
+	// log(0.456) + log(0.173) -> -2.601 : -2.538
+	// log(0.245) + log(0.146) -> -3.413 : -3.327
+	// log(0.756) + log(0.542) -> -0.966 : -0.892
+	// log(0.084) + log(0.412) -> -3.421 : -3.362
+	// mse 7.8114e-06
 }
 
 // copy-paste
@@ -209,7 +205,6 @@ func Test_mixlnarithms(t *testing.T) {
 	// mixer := NewWeightedGradientNN(nntestLog(8, 4), nntestLog(8, 5))
 	mixer := NewWeightedGradientNN(nntestLog(8, 2), nntestLog(8, 4), nntestLog(8, 5))
 	// mixer := NewWeightedMixerNN(nntestLog(8, 2), nntestLog(8, 4), nntestLog(8, 5))
-	nn := &mixer.NeuNetwork
 
 	normalize := func(vec []float64) {
 		divVectorNum(vec, float64(-18))
@@ -217,7 +212,7 @@ func Test_mixlnarithms(t *testing.T) {
 	denormalize := func(vec []float64) {
 		mulVectorNum(vec, float64(-18))
 	}
-	nn.callbacks = &NeuCallbacks{nil, normalize, denormalize}
+	mixer.callbacks = &NeuCallbacks{nil, normalize, denormalize}
 
 	sumlogarithms := func(xvec []float64) []float64 {
 		var y = []float64{0}
@@ -227,13 +222,12 @@ func Test_mixlnarithms(t *testing.T) {
 		return y
 	}
 	Xs := newMatrix(1000, 2)
-	ttp := &TTP{nn: nn, resultvalcb: sumlogarithms, repeat: 3, maxbackprops: 2E6}
-	var converged int
-	for converged == 0 {
+	ttp := &TTP{nn: mixer, resultvalcb: sumlogarithms, repeat: 3, maxbackprops: 2E6}
+	for cnv := 0; cnv == 0; {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
 		}
-		converged = nn.Train(Xs, ttp)
+		cnv = ttp.Train(TtpArr(Xs))
 	}
 	var mse float64
 	for i := 0; i < 4; i++ {
@@ -241,8 +235,8 @@ func Test_mixlnarithms(t *testing.T) {
 		xvec[0] = rand.Float64()
 		xvec[1] = rand.Float64()
 		y2 := sumlogarithms(xvec)
-		y1 := nn.Predict(xvec)
-		mse += nn.costfunction(y2)
+		y1 := mixer.Predict(xvec)
+		mse += mixer.costfunction(y2)
 		fmt.Printf("log(%.3f) + log(%.3f) -> %.3f : %.3f\n", xvec[0], xvec[1], y1[0], y2[0])
 	}
 	fmt.Printf("mse %.4e\n", mse/4)

@@ -100,9 +100,10 @@ func NewWeightedMixerNN(nns ...NeuNetworkInterface) *WeightedMixerNN {
 // in the forward pass networks do the work
 func (mixer *WeightedMixerNN) forward(xvec []float64) []float64 {
 	var xnorm = xvec
-	if mixer.callbacks != nil && mixer.callbacks.normcbX != nil {
+	cb := mixer.getCallbacks()
+	if cb != nil && cb.normcbX != nil {
 		xnorm = cloneVector(xvec)
-		mixer.callbacks.normcbX(xnorm)
+		cb.normcbX(xnorm)
 	}
 	for i := 0; i < len(mixer.nns); i++ {
 		if mixer.lost[i] {
@@ -116,7 +117,7 @@ func (mixer *WeightedMixerNN) forward(xvec []float64) []float64 {
 // output = weighted-sum(NNi)
 func (mixer *WeightedMixerNN) reForward() []float64 {
 	osize := mixer.olayer.size
-	fillVector(mixer.olayer.avec, 0)
+	fillVector(mixer.olayer.avec, 0.0)
 	for i := 0; i < len(mixer.nns); i++ {
 		if mixer.lost[i] {
 			continue
@@ -258,8 +259,8 @@ func (mixer *WeightedMixerNN) fixMixingWin() {
 	mixer.normalizeNegative()
 	mixer.rebalancePositive()
 
-	fillVector(mixer.ulayer.deltas, 0)
-	fillVector(mixer.tmpcost, 0)
+	fillVector(mixer.ulayer.deltas, 0.0)
+	fillVector(mixer.tmpcost, 0.0)
 
 	mixer.traceWeights()
 }
@@ -345,8 +346,8 @@ func (mixer *WeightedMixerNN) fixMixingWeights() {
 	mixer.normalizeNegative()
 	mixer.rebalancePositive()
 
-	fillVector(mixer.ulayer.deltas, 0)
-	fillVector(mixer.tmpcost, 0)
+	fillVector(mixer.ulayer.deltas, 0.0)
+	fillVector(mixer.tmpcost, 0.0)
 
 	mixer.traceWeights()
 }
@@ -358,7 +359,7 @@ func (mixer *WeightedMixerNN) fixMixingWeights() {
 // makes sure sum(weight_j) == 1 for each j-th neuron
 func (mixer *WeightedMixerNN) rebalancePositive() {
 	osize := mixer.olayer.size
-	fillVector(mixer.tmpweights, 0)
+	fillVector(mixer.tmpweights, 0.0)
 	for i := 0; i < len(mixer.nns); i++ {
 		if mixer.lost[i] {
 			continue
