@@ -22,6 +22,7 @@ const (
 //===========================================================================
 type TtpStream interface {
 	getXvec(i int) []float64
+	getYvec(i int) []float64
 	getSize() int
 	getSidx() int
 }
@@ -32,8 +33,12 @@ type TtpStream interface {
 type TtpArr [][]float64
 
 func (Xs TtpArr) getXvec(i int) []float64 { return Xs[i] }
-func (Xs TtpArr) getSize() int            { return len(Xs) }
-func (Xs TtpArr) getSidx() int            { return 0 }
+func (Xs TtpArr) getYvec(i int) []float64 {
+	assert(false, "undefined for an array - use ttp.result*..")
+	return []float64{0}
+}
+func (Xs TtpArr) getSize() int { return len(Xs) }
+func (Xs TtpArr) getSidx() int { return 0 }
 
 //
 // rightmost window of a given size "into" a stream
@@ -87,48 +92,47 @@ func (trwin *TreamWin) getYvec(i int) []float64 {
 type TTP struct {
 	// the network
 	nn NeuNetworkInterface
-	// actual result set, or one of the callbacks below
-	resultset   [][]float64
-	resultvalcb func(xvec []float64) []float64 // generate yvec for a given xvec
-	resultidxcb func(xidx int) []float64       // compute yvec given an index of xvec from the training set
-	// repeat training set so many times
-	repeat int
-	// testing policy
-	pct int // %% of the training set for testing
-	num int // number of training instances used for --/--
-	// the following option is useful for time series, for instance
-	// instead of selecting random batches out of the training set
-	// test cost and check-gradients inline with the training, i. e., sequentially
-	sequential bool
-	//
-	batchsize int // based on the size of the training set and the network tunable
-	// converged? bitwise sum of conditions below
-	// note: Train() routine exits on whatever comes first
-	maxweightdelta float64 // L2 norm(previous-weights - current-weights)
-	maxgradnorm    float64 // L2 norm(gradient)
-	maxcost        float64 // average cost-function(testing-set)
-	maxbackprops   int     // max number of back propagations
+	// the following three fields are used with TtpArr, or to override TtpStream.getYvec()
+	resultset    [][]float64
+	resultvalcb  func(xvec []float64) []float64 // generate yvec for a given xvec
+	resultidxcb  func(xidx int) []float64       // compute yvec given an index of xvec from the training set
+	logger       *log.Logger                    //
+	maxcost      float64                        // converged |= avgcost < maxcost unless not set
+	avgcost      float64                        // runtime
+	repeat       int                            // repeat training set so many times
+	pct          int                            // %% of the training set for testing
+	num          int                            // number of training instances used for --/--
+	maxbackprops int                            // max number of back propagations
+	batchsize    int                            // based on the size of the training set and the network tunable
+	runnerid     int                            //
+	sequential   bool                           // random testing is meaningless and is, therefore, forbidden
 }
 
 // set defaults
 func (ttp *TTP) init(m int) {
-	assert(ttp.resultset == nil || len(ttp.resultset) >= m)
-	assert(ttp.resultset != nil || ttp.resultvalcb != nil || ttp.resultidxcb != nil)
-	if ttp.sequential {
-		assert(ttp.repeat < 2, "cannot repeat time series and such")
-	}
-	if ttp.pct == 0 && ttp.num == 0 {
-		ttp.pct = 30
-	}
 	ttp.repeat = max(ttp.repeat, 1)
+	assert(!ttp.sequential || ttp.repeat == 1)
 
 	ttp.batchsize = ttp.nn.getTunables().batchsize
 	if ttp.batchsize <= 0 || ttp.batchsize > m {
 		ttp.batchsize = m
 	}
+	// avg cost
+	if ttp.num == 0 {
+		if ttp.pct == 0 {
+			ttp.num = ttp.batchsize
+			if ttp.num == 1 && m > 50 {
+				ttp.num = 10
+			}
+		} else {
+			num := m * ttp.pct / 100
+			b := ttp.batchsize
+			ttp.num = max((num+b/2)/b*b, b)
+		}
+	}
 }
 
-func (ttp *TTP) getYvec(xvec []float64, i int) []float64 {
+func (ttp *TTP) getYvec(tstream TtpStream, xvec []float64, i int) []float64 {
 	var yvec []float64
 	switch {
 	case ttp.resultset != nil:
@@ -137,56 +141,10 @@ func (ttp *TTP) getYvec(xvec []float64, i int) []float64 {
 		yvec = ttp.resultvalcb(xvec)
 	case ttp.resultidxcb != nil:
 		yvec = ttp.resultidxcb(i)
+	default:
+		yvec = tstream.getYvec(i)
 	}
 	return yvec
-}
-
-func (ttp *TTP) convergedBp() (cnv int) {
-	if ttp.maxbackprops > 0 && ttp.nn.getNbprops() >= ttp.maxbackprops {
-		cnv |= ConvergedMaxBackprops
-	}
-	return
-}
-
-func (ttp *TTP) testRandomBatch(Xs TtpStream, cnv int, nbp int) int {
-	assert(!ttp.sequential)
-	nn, num := ttp.nn, ttp.num
-	m, sidx := Xs.getSize(), Xs.getSidx()
-	if num == 0 {
-		num = m * ttp.pct / 100
-	}
-	trace_rand_cost := cli.tracecost && (nn.getNbprops()/cli.nbp > nbp/cli.nbp)
-	if ttp.maxcost == 0 && !trace_rand_cost {
-		return cnv
-	}
-	// round up
-	numbatches := (num + ttp.batchsize/2) / ttp.batchsize
-	numbatches = max(numbatches, 1)
-	cost, creg := 0.0, 0.0
-	if nn.getTunables().lambda > 0 {
-		creg = nn.costl2reg()
-	}
-	for b := 0; b < numbatches; b++ {
-		cbatch := 0.0
-		for k := 0; k < ttp.batchsize; k++ {
-			i := int(rand.Int31n(int32(m)))
-			xvec := Xs.getXvec(sidx + i)
-			yvec := ttp.getYvec(xvec, sidx+i)
-			nn.forward(xvec)
-			cbatch += nn.costfunction(yvec)
-		}
-		cost += (cbatch + creg) / float64(ttp.batchsize)
-	}
-	if math.Abs(cost) < math.MaxInt16 {
-		cost /= float64(numbatches)
-		if ttp.maxcost > 0 && cost < ttp.maxcost {
-			cnv |= ConvergedCost
-		}
-		if trace_rand_cost {
-			log.Print(nn.getNbprops(), fmt.Sprintf(" c %f", cost))
-		}
-	}
-	return cnv
 }
 
 //===========================================================================
@@ -195,7 +153,7 @@ func (ttp *TTP) testRandomBatch(Xs TtpStream, cnv int, nbp int) int {
 //
 //===========================================================================
 // check gradients for an already back-propagated mini-batch
-func (ttp *TTP) checkGradientsAfterBp(Xs TtpStream, idxbase int, to int) {
+func (ttp *TTP) checkGradientsAfterBp(tstream TtpStream, idxbase int, to int) {
 	const eps = GRADCHECK_eps
 	const eps2 = eps * 2
 	nn := ttp.nn
@@ -209,8 +167,8 @@ func (ttp *TTP) checkGradientsAfterBp(Xs TtpStream, idxbase int, to int) {
 				w := layer.weights[i][j]
 				wplus, wminus := w+eps, w-eps
 				for k := idxbase; k < to; k++ {
-					xvec := Xs.getXvec(k)
-					yvec := ttp.getYvec(xvec, k)
+					xvec := tstream.getXvec(k)
+					yvec := ttp.getYvec(tstream, xvec, k)
 
 					layer.weights[i][j] = wplus
 					if batchsize == 1 {
@@ -242,12 +200,17 @@ func (ttp *TTP) checkGradientsAfterBp(Xs TtpStream, idxbase int, to int) {
 
 	}
 	if nfail > 0 {
-		log.Print("grad-check: ", nn.getNbprops(), fmt.Sprintf(" %d/%d [%2d=>(%2d->%2d)] %.4e", nfail, ntotal, ll, ii, jj, maxdiff))
+		s := fmt.Sprintf(" %d/%d [%2d=>(%2d->%2d)] %.4e", nfail, ntotal, ll, ii, jj, maxdiff)
+		if ttp.logger == nil {
+			log.Print("grad-check: ", nn.getNbprops(), s)
+		} else {
+			ttp.logger.Print("grad-check: ", nn.getNbprops(), s)
+		}
 	}
 }
 
 // check gradients for a selected weight inline with processing a given (next) mini-batch
-func (ttp *TTP) trainAndCheckGradients(Xs TtpStream, idxbase int, to int, l, i, j int) {
+func (ttp *TTP) trainAndCheckGradients(tstream TtpStream, idxbase int, to int, l, i, j int) {
 	const eps = GRADCHECK_eps
 	const eps2 = eps * 2
 	nn := ttp.nn
@@ -256,8 +219,8 @@ func (ttp *TTP) trainAndCheckGradients(Xs TtpStream, idxbase int, to int, l, i, 
 	w := layer.weights[i][j]
 	wplus, wminus := w+eps, w-eps
 	for k := idxbase; k < to; k++ {
-		xvec := Xs.getXvec(k)
-		yvec := ttp.getYvec(xvec, k)
+		xvec := tstream.getXvec(k)
+		yvec := ttp.getYvec(tstream, xvec, k)
 		nn.TrainStep(xvec, yvec)
 
 		layer.weights[i][j] = wplus
@@ -276,21 +239,28 @@ func (ttp *TTP) trainAndCheckGradients(Xs TtpStream, idxbase int, to int, l, i, 
 	gradij := (costplus - costminus + nn.costl2_weightij(l, i, j, eps)) / float64(batchsize) / eps2
 	diff := math.Abs(gradij - layer.gradient[i][j])
 	if diff > eps2 {
-		log.Print("grad-batch: ", nn.getNbprops(), fmt.Sprintf(" [%2d=>(%2d->%2d)] %.4e", l, i, j, diff))
+		s := fmt.Sprintf(" [%2d=>(%2d->%2d)] %.4e", l, i, j, diff)
+		if ttp.logger == nil {
+			log.Print("grad-batch: ", nn.getNbprops(), s)
+		} else {
+			ttp.logger.Print("grad-batch: ", nn.getNbprops(), s)
+		}
 	}
 	nn.fixWeights(batchsize) // <============== (2)
 }
 
-func (ttp *TTP) TrainSet(Xs TtpStream, costnum int) int {
-	sidx, m, bi, batchsize := Xs.getSidx(), Xs.getSize(), 0, ttp.batchsize
-	cost := 0.0
-	nn := ttp.nn
+func (ttp *TTP) TrainSet(tstream TtpStream) int {
+	sidx, m, bi, batchsize := tstream.getSidx(), tstream.getSize(), 0, ttp.batchsize
+	nn, cost, num := ttp.nn, 0.0, 0
+	if ttp.sequential {
+		num = ttp.num
+	}
 	for i := sidx; i < sidx+m; i++ {
-		xvec := Xs.getXvec(i)
-		yvec := ttp.getYvec(xvec, i)
+		xvec := tstream.getXvec(i)
+		yvec := ttp.getYvec(tstream, xvec, i)
 		nn.TrainStep(xvec, yvec)
-		// costnum > 0: cumulative cost of the last so-many examples in the set
-		if costnum > m-i-1 {
+		// cumulative cost of the last so-many examples in the set
+		if num > m-(i-sidx)-1 {
 			cost += nn.costfunction(yvec)
 		}
 		bi++
@@ -300,7 +270,7 @@ func (ttp *TTP) TrainSet(Xs TtpStream, costnum int) int {
 		nn.fixGradients(batchsize) // <============== (1)
 		if cli.checkgrad && nn.getNbprops()%cli.nbp == 0 && (!ttp.sequential || batchsize == 1) {
 			idxbase := i - batchsize + 1
-			ttp.checkGradientsAfterBp(Xs, idxbase, i+1)
+			ttp.checkGradientsAfterBp(tstream, idxbase, i+1)
 		}
 		nn.fixWeights(batchsize) // <============== (2)
 		bi = 0
@@ -308,42 +278,63 @@ func (ttp *TTP) TrainSet(Xs TtpStream, costnum int) int {
 			batchsize = m - i - 1
 		}
 	}
-	cnv := ttp.convergedBp()
-	if costnum > 0 {
-		cost /= float64(costnum)
-		if cli.tracecost {
-			log.Print(nn.getNbprops(), fmt.Sprintf(" c %f", cost))
-		}
-		if ttp.maxcost > 0 && cost < ttp.maxcost {
-			cnv |= ConvergedCost
-		}
+	if num > 0 {
+		ttp.avgcost = cost / float64(num)
 	}
-	return cnv
+	if ttp.maxbackprops > 0 && ttp.nn.getNbprops() >= ttp.maxbackprops {
+		return ConvergedMaxBackprops
+	}
+	return 0
 }
 
-func (ttp *TTP) Train(Xs TtpStream) int {
+func (ttp *TTP) costRandomBatch(tstream TtpStream) {
 	nn := ttp.nn
-	converged, nbp, m, costnum := 0, nn.getNbprops(), Xs.getSize(), 0
-	ttp.init(m)
-	// case: sequential processing with possible inline tracing and/or grad-checking
-	if ttp.sequential {
-		if (nn.getNbprops()+m)/cli.nbp > nbp/cli.nbp {
-			// set 'costnum' to trace cost and/or check cost convergence
-			if ttp.maxcost > 0 || cli.tracecost {
-				costnum = ttp.num
-				if costnum == 0 {
-					costnum = m * ttp.pct / 100
-				}
-			}
-		}
-		return ttp.TrainSet(Xs, costnum)
+	m, sidx := tstream.getSize(), tstream.getSidx()
+	ttp.avgcost = 0
+	for k := 0; k < ttp.num; k++ {
+		i := int(rand.Int31n(int32(m)))
+		xvec := tstream.getXvec(sidx + i)
+		yvec := ttp.getYvec(tstream, xvec, sidx+i)
+		nn.forward(xvec)
+		ttp.avgcost += nn.costfunction(yvec)
 	}
+	ttp.avgcost /= float64(ttp.num)
+}
 
-	// case: train, possibly multiple times while selecting random batches for cost/grad-checking
-	for k := 0; k < ttp.repeat && converged == 0; k++ {
-		converged = ttp.TrainSet(Xs, 0)
+func (ttp *TTP) Train(tstream TtpStream) (cnv int) {
+	m := tstream.getSize()
+	ttp.init(m)
+	nbp := ttp.nn.getNbprops()
+	time_to_trace := (nbp+m)/cli.nbp > nbp/cli.nbp
+	for k := 0; k < ttp.repeat && cnv == 0; k++ {
+		cnv = ttp.TrainSet(tstream)
 	}
-	// test using a random subset of the already processed training data
-	// also, trace cost and check convergence (on cost)
-	return ttp.testRandomBatch(Xs, converged, nbp)
+	if !ttp.sequential {
+		ttp.costRandomBatch(tstream)
+	}
+	if ttp.nn.getTunables().lambda > 0 {
+		ttp.avgcost += ttp.nn.costl2reg()
+	}
+	if ttp.maxcost > 0 && ttp.avgcost < ttp.maxcost {
+		cnv |= ConvergedCost
+	}
+	if time_to_trace && cli.tracecost {
+		ttp.logcost()
+	}
+	return
+}
+
+func (ttp *TTP) logcost() {
+	nbp := ttp.nn.getNbprops()
+	var s string
+	if ttp.runnerid == 0 {
+		s = fmt.Sprintf("%d: c %f", nbp, ttp.avgcost)
+	} else {
+		s = fmt.Sprintf("%d: %2d: c %4e", nbp, ttp.runnerid, ttp.avgcost)
+	}
+	if ttp.logger == nil {
+		log.Print(s)
+	} else {
+		ttp.logger.Print(s)
+	}
 }

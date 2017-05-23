@@ -26,7 +26,8 @@ type EvoTunables struct {
 }
 
 type Evolution struct {
-	NeuNetwork
+	NeuNetworkInterface
+	nn       *NeuNetwork
 	nn_cpy   *NeuNetwork
 	tunables *EvoTunables
 	rewards  []float64
@@ -56,11 +57,12 @@ func NewEvolution(
 		}
 	}
 	rewards := newVector(tunables.nperturb * 2)
-	evo = &Evolution{NeuNetwork: *nn, nn_cpy: nn_cpy, tunables: tunables, rewards: rewards, gnoise: gnoise, id: id}
+	evo = &Evolution{NeuNetworkInterface: nn, nn: nn, nn_cpy: nn_cpy, tunables: tunables, rewards: rewards, gnoise: gnoise, id: id}
 
 	evo.newrand = rand.New(rand.NewSource(int64((id + 1) * 100)))
 	evo.l = evo.newrand.Intn((id + 1) * 100)
-	evo.nnint = evo
+
+	nn.nnint = evo
 	return
 }
 
@@ -72,17 +74,17 @@ func NewEvolution(
 //	backpropGradients()
 //
 func (evo *Evolution) computeDeltas(yvec []float64) []float64 {
-	assert(len(yvec) == evo.coutput.size)
-	olayer := evo.layers[evo.lastidx]
+	assert(len(yvec) == evo.nn.coutput.size)
+	olayer := evo.nn.layers[evo.nn.lastidx]
 	copyVector(olayer.deltas, yvec) // FIXME: temp, to pass between IF routines
 	return yvec
 }
 
 // overload to generate normal jitter for the layer l
 func (evo *Evolution) backpropDeltas() {
-	evo.nbackprops++
-	l := evo.l % evo.lastidx
-	layer := evo.NeuNetwork.layers[l]
+	evo.nn.nbackprops++
+	l := evo.l % evo.nn.lastidx
+	layer := evo.nn.layers[l]
 	cols := layer.next.size
 	noisycube := evo.gnoise[l]
 	for jj, j := 0, 0; j < evo.tunables.nperturb; {
@@ -109,14 +111,14 @@ func (evo *Evolution) backpropDeltas() {
 }
 
 func (evo *Evolution) backpropGradients() {
-	if evo.nbackprops%evo.tunables.rewdup == 0 {
+	if evo.nn.nbackprops%evo.tunables.rewdup == 0 {
 		evo.tunables.rewd *= 2
 	}
 	// round robin: one layer at a time
-	l := evo.l % evo.lastidx
+	l := evo.l % evo.nn.lastidx
 
-	olayer := evo.layers[evo.lastidx]
-	layer, layer_cpy := evo.NeuNetwork.layers[l], evo.nn_cpy.layers[l]
+	olayer := evo.nn.layers[evo.nn.lastidx]
+	layer, layer_cpy := evo.nn.layers[l], evo.nn_cpy.layers[l]
 	copyMatrix(layer_cpy.weights, layer.weights)
 
 	noisycube := evo.gnoise[l]
@@ -166,7 +168,7 @@ func (evo *Evolution) backpropGradients() {
 
 // average accumulated weight updates over a mini-batch
 func (evo *Evolution) fixWeights(batchsize int) {
-	nn := &evo.NeuNetwork
+	nn := evo.nn
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		addMatrixElem(layer.weights, layer.gradient)

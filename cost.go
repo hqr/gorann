@@ -16,7 +16,7 @@ func (nn *NeuNetwork) CostMse(yvec []float64) float64 {
 	assert(len(yvec) == nn.coutput.size)
 	ynorm := nn.normalizeY(yvec)
 	olayer := nn.layers[nn.lastidx]
-	return normL2VectorSquared(ynorm, olayer.avec) / 2
+	return normL2DistanceSquared(ynorm, olayer.avec) / 2
 }
 
 // the "L2 regularization" part of the cost

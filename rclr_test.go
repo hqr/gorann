@@ -93,7 +93,7 @@ func Test_rcluster(t *testing.T) {
 	construct_I()
 
 	for _, initiator := range ivec {
-		r := rclr.p.attach(initiator.evo, initiator.id)
+		r := rclr.p.attach(initiator.evo, initiator.id, false, nil)
 		initiator.r = r
 	}
 	rclr.p.start()
@@ -123,9 +123,7 @@ func Test_rcluster(t *testing.T) {
 			for i, initiator := range ivec {
 				scLat[i] = float64(initiator.scoreLat) / float64(rclr.coperiod*rclr.ni)
 				scSel[i] = float64(initiator.scoreSel) / float64(rclr.coperiod)
-				b := initiator.evo.getTunables().batchsize
-				scCost[i] = initiator.r.avgcost * float64(b) / float64(rclr.coperiod)
-				initiator.r.avgcost = 0
+				scCost[i] = initiator.r.getCost()
 				initiator.scoreLat, initiator.scoreSel = 0, 0
 			}
 			fmt.Printf("%3d: %.3f - score min latency\n", rclr.p.step/rclr.coperiod, scLat)
@@ -168,7 +166,7 @@ func construct_I() {
 			reptvec: make([]*Target, rclr.copies),
 			distory: newVector(rclr.hisize),
 			xvectmp: newVector(rclr.hisize),
-			id:      i}
+			id:      i + 1}
 
 		ivec[i] = initiator
 	}
@@ -279,7 +277,7 @@ func collab_I() {
 			topidx = i
 		}
 	}
-	first := &ivec[topidx].evo.NeuNetwork
+	first := ivec[topidx].evo.nn
 	for i, initiator := range ivec {
 		if i == topidx {
 			continue
@@ -288,7 +286,7 @@ func collab_I() {
 		w2 := float64(initiator.score()) / float64(topscore+initiator.score())
 		if w1 > w2*rclr.scorehigh {
 			fmt.Printf("%d(%.3f) --> %d(%.3f)\n", topidx, w1, i, w2)
-			nn := &initiator.evo.NeuNetwork
+			nn := initiator.evo.nn
 			nn.reset()
 			nn.copyNetwork(first)
 		}

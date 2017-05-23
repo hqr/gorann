@@ -66,6 +66,13 @@ func zeroMatrix(mat [][]float64) {
 	}
 }
 
+func fillMatrix(mat [][]float64, args ...interface{}) {
+	rows := len(mat)
+	for r := 0; r < rows; r++ {
+		fillVector(mat[r], args...)
+	}
+}
+
 func fillMatrixNormal(mat [][]float64, mean, std float64, sparsity int, newrand *rand.Rand) {
 	rows := len(mat)
 	cols := len(mat[0])
@@ -148,26 +155,26 @@ func normL2Matrix(matA [][]float64, matB [][]float64) float64 {
 	edist := 0.0
 	for r := 0; r < rows; r++ {
 		if matB == nil {
-			edist += normL2VectorSquared(matA[r], nil)
+			edist += normL2VectorSquared(matA[r])
 		} else {
-			edist += normL2VectorSquared(matA[r], matB[r])
+			edist += normL2DistanceSquared(matA[r], matB[r])
 		}
 	}
 	return math.Sqrt(edist)
 }
 
-func normL2VectorSquared(avec []float64, bvec []float64) float64 {
-	cols := len(avec)
-	assert(bvec == nil || cols == len(bvec))
-	edist := 0.0
-	for c := 0; c < cols; c++ {
-		if bvec == nil {
-			edist += pow2(avec[c])
-		} else {
-			edist += pow2(avec[c] - bvec[c])
-		}
+func normL2DistanceSquared(avec []float64, bvec []float64) (edist float64) {
+	for c := 0; c < len(avec); c++ {
+		edist += pow2(avec[c] - bvec[c])
 	}
-	return edist
+	return
+}
+
+func normL2VectorSquared(vec []float64) (edist float64) {
+	for c := 0; c < len(vec); c++ {
+		edist += pow2(vec[c])
+	}
+	return
 }
 
 func meanVector(vec []float64) (mean float64) {
@@ -183,7 +190,7 @@ func meanStdVector(vec []float64) (mean, std float64) {
 	mean = meanVector(vec)
 	cpy := cloneVector(vec)
 	addVectorNum(cpy, -mean)
-	std = math.Sqrt(normL2VectorSquared(cpy, nil) / flen)
+	std = math.Sqrt(normL2VectorSquared(cpy) / flen)
 	return
 }
 
@@ -192,7 +199,7 @@ func standardizeVectorZscore(vec []float64) (mean, std float64) {
 	flen := float64(len(vec))
 	mean = meanVector(vec)
 	addVectorNum(vec, -mean)
-	std = math.Sqrt(normL2VectorSquared(vec, nil) / flen)
+	std = math.Sqrt(normL2VectorSquared(vec) / flen)
 	divVectorNum(vec, std)
 	return
 }
@@ -285,6 +292,18 @@ func newVector(size int, args ...interface{}) []float64 {
 	v := make([]float64, size)
 	fillVector(v, args...)
 	return v
+}
+
+func fillVectorSpecial(dst []float64, mean []float64, sign []float64, sigma float64, newrand *rand.Rand) {
+	for i := 0; i < len(dst); i++ {
+		mean := mean[i] + sigma*sign[i]/2
+		dst[i] = newrand.NormFloat64()*sigma + mean
+		if dst[i] <= 0 {
+			dst[i] = sigma / 100
+		} else if dst[i] >= 1 {
+			dst[i] = 1 - sigma/100
+		}
+	}
 }
 
 func fillVector(v []float64, args ...interface{}) {

@@ -173,7 +173,7 @@ func ExampleF_sumlogarithms() {
 		return y
 	}
 	Xs := newMatrix(1000, 2)
-	ttp := &TTP{nn: nn, resultvalcb: sumlogarithms, repeat: 3, maxbackprops: 2E6}
+	ttp := &TTP{nn: nn, resultvalcb: sumlogarithms, repeat: 3, pct: 30, maxbackprops: 2E6}
 	for cnv := 0; cnv == 0; {
 		for i := 0; i < len(Xs); i++ {
 			Xs[i][0], Xs[i][1] = rand.Float64(), rand.Float64()
@@ -192,11 +192,11 @@ func ExampleF_sumlogarithms() {
 	}
 	fmt.Printf("mse %.4e\n", mse/4)
 	// Output:
-	// log(0.456) + log(0.173) -> -2.601 : -2.538
-	// log(0.245) + log(0.146) -> -3.413 : -3.327
-	// log(0.756) + log(0.542) -> -0.966 : -0.892
-	// log(0.084) + log(0.412) -> -3.421 : -3.362
-	// mse 7.8114e-06
+	// log(0.408) + log(0.273) -> -2.211 : -2.194
+	// log(0.737) + log(0.301) -> -1.552 : -1.506
+	// log(0.702) + log(0.337) -> -1.491 : -1.441
+	// log(0.981) + log(0.904) -> -0.246 : -0.120
+	// mse 8.0408e-06
 }
 
 // copy-paste

@@ -2,6 +2,7 @@ package gorann
 
 import (
 	"flag"
+	"log"
 )
 
 type NeuLayerConfig struct {
@@ -130,6 +131,9 @@ func init() {
 	flag.IntVar(&cli.lessrnn, "lessrnn", 0, "limits the number of live neuron connections: 0 - unrolled, -1 - ANN, >= size - naive, otherwise limited")
 
 	flag.Parse()
+
+	// standard logger
+	log.SetFlags(log.Ltime)
 }
 
 func Configure() {
