@@ -113,6 +113,12 @@ type CommandLine struct {
 	checkgrad bool
 	// limits the number of live neuron connections: (config.size - lessrnn)
 	lessrnn int
+	// module-specific
+	int1 int
+	int2 int
+	int3 int
+	int4 int
+	int5 int
 }
 
 var cli = CommandLine{}
@@ -129,6 +135,12 @@ func init() {
 	flag.BoolVar(&cli.tracecost, "tracecost", false, "trace cost every \"trace interval\"")
 
 	flag.IntVar(&cli.lessrnn, "lessrnn", 0, "limits the number of live neuron connections: 0 - unrolled, -1 - ANN, >= size - naive, otherwise limited")
+
+	flag.IntVar(&cli.int1, "int1", 0, "")
+	flag.IntVar(&cli.int2, "int2", 0, "")
+	flag.IntVar(&cli.int3, "int3", 0, "")
+	flag.IntVar(&cli.int4, "int4", 0, "")
+	flag.IntVar(&cli.int5, "int5", 0, "")
 
 	flag.Parse()
 

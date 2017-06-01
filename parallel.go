@@ -13,6 +13,7 @@ type NeuRunner struct {
 	newrand *rand.Rand
 	trwin   *TreamWin // ttp stream window
 	ttp     *TTP
+	next    *NeuRunner
 	id      int
 	step    int
 	trained int
@@ -24,7 +25,8 @@ type NeuRunner struct {
 }
 
 type NeuParallel struct {
-	rumap map[int]*NeuRunner
+	rumap      map[int]*NeuRunner
+	head, tail *NeuRunner
 	//
 	wg        *sync.WaitGroup
 	nextround *sync.Mutex
@@ -55,10 +57,30 @@ func (p *NeuParallel) attach(nnint NeuNetworkInterface, id int, batch bool, ttp 
 	assert(id > 0)
 	r := NewNeuRunner(nnint, p, id, batch, ttp)
 	p.rumap[id] = r
+	if p.head == nil {
+		p.head = r
+		p.tail = r
+	} else {
+		p.tail.next = r
+		p.tail = r
+	}
 	return r
 }
 
 func (p *NeuParallel) detach(id int) {
+	r := p.rumap[id]
+	if p.head == r {
+		p.head = r.next
+	}
+	for _, rr := range p.rumap {
+		if rr.next == r {
+			rr.next = r.next
+			if p.tail == r {
+				assert(r.next == nil)
+				p.tail = rr
+			}
+		}
+	}
 	delete(p.rumap, id)
 }
 
@@ -87,14 +109,44 @@ func (p *NeuParallel) stop() {
 	}
 }
 
+// counter clockwise
+func (p *NeuParallel) rotate() {
+	if p.head == nil {
+		assert(len(p.rumap) == 0)
+		assert(false, "empty")
+		return
+	}
+	if p.head == p.tail {
+		assert(len(p.rumap) == 1)
+		return
+	}
+	headwin := p.head.trwin
+	for r := p.head; r.next != nil; r = r.next {
+		r.trwin = r.next.trwin
+	}
+	p.tail.trwin = headwin
+	n := 0
+	for r := p.head; r != nil; r = r.next {
+		n++
+		r.postRotate()
+	}
+	assert(n == len(p.rumap))
+}
+
 // must be called periodically (from a caller's training loop)
-func (p *NeuParallel) compute() {
+func (p *NeuParallel) compute() bool {
+	for _, r := range p.rumap {
+		if r.stopped {
+			return false
+		}
+	}
 	p.step++
 	p.nextround.Unlock()
 	p.cond.Broadcast()
 	p.wg.Wait() // ===================>>> TrainStep by NeuRunner(s)
 	p.nextround.Lock()
 	p.wg.Add(len(p.rumap))
+	return true
 }
 
 //
@@ -179,7 +231,21 @@ func (r *NeuRunner) computeBatch() {
 	}
 }
 
-func (r *NeuRunner) getCost() float64 {
+func (r *NeuRunner) postRotate() {
+	r.trained = r.trwin.getSidx()
+	r.fixed = r.trained
+}
+
+func (r *NeuRunner) getCost(fullwindow bool) float64 {
+	if fullwindow {
+		c, i0, n := 0.0, r.trwin.getSidx(), r.trwin.getSize()
+		for i := i0; i < i0+n; i++ {
+			xvec, yvec := r.trwin.getXvec(i), r.trwin.getYvec(i)
+			r.nnint.forward(xvec)
+			c += r.nnint.costfunction(yvec)
+		}
+		return c / float64(n) // FIXME: regularization
+	}
 	if r.batch {
 		return r.ttp.avgcost
 	}

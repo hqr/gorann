@@ -44,10 +44,10 @@ type WeightedMixerNN struct {
 // c-tor
 func NewWeightedMixerNN(nns ...NeuNetworkInterface) *WeightedMixerNN {
 	assert(len(nns) > 1)
-	osize := nns[0].getCoutput().size
+	osize := nns[0].getOsize()
 	for i := 1; i < len(nns); i++ {
-		assert(nns[0].getCinput().size == nns[i].getCinput().size)
-		assert(osize == nns[i].getCoutput().size)
+		assert(nns[0].getIsize() == nns[i].getIsize())
+		assert(osize == nns[i].getOsize())
 		assert(nns[0].getCallbacks() == nns[i].getCallbacks())
 	}
 	// NN base

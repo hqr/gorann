@@ -29,10 +29,9 @@ type NeuNetworkInterface interface {
 	populateDeltas(deltas []float64)
 	initXavier(newrand *rand.Rand)
 	// Get accessors
-	getCinput() *NeuLayerConfig
-	getCoutput() *NeuLayerConfig
 	getLayer(l int) *NeuLayer
 	getIsize() int
+	getOsize() int
 	getHsize() int
 	getHnum() int
 	getTunables() *NeuTunables
@@ -252,6 +251,42 @@ func (nn *NeuNetwork) initXavier(newrand *rand.Rand) {
 					layer.weights[i][j] = d*rand.Float64() - u
 				} else {
 					layer.weights[i][j] = d*newrand.Float64() - u
+				}
+			}
+		}
+	}
+}
+
+func (nn *NeuNetwork) initXavierSparse(newrand *rand.Rand, pct int) {
+	qsix := math.Sqrt(6)
+	numweights := 0
+	for l := 1; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		next := layer.next
+		numweights += layer.size * next.size
+	}
+	wm := numweights * pct / 100
+	for l := 0; l < nn.lastidx; l++ {
+		layer := nn.layers[l]
+		next := layer.next
+		u := qsix / float64(layer.size+next.size)
+		d := u * 2
+		for i := 0; i < layer.size; i++ {
+			for j := 0; j < next.size; j++ {
+				if newrand == nil {
+					k := rand.Intn(numweights)
+					if k < wm {
+						layer.weights[i][j] = 0
+					} else {
+						layer.weights[i][j] = d*rand.Float64() - u
+					}
+				} else {
+					k := newrand.Intn(numweights)
+					if k < wm {
+						layer.weights[i][j] = 0
+					} else {
+						layer.weights[i][j] = d*newrand.Float64() - u
+					}
 				}
 			}
 		}
@@ -511,16 +546,12 @@ func (nn *NeuNetwork) TrainStep(xvec []float64, yvec []float64) {
 // Get accessors
 //
 //============================================================
-func (nn *NeuNetwork) getCinput() *NeuLayerConfig {
-	return &nn.cinput
-}
-
 func (nn *NeuNetwork) getIsize() int {
 	return nn.cinput.size
 }
 
-func (nn *NeuNetwork) getCoutput() *NeuLayerConfig {
-	return &nn.coutput
+func (nn *NeuNetwork) getOsize() int {
+	return nn.coutput.size
 }
 
 func (nn *NeuNetwork) getLayer(l int) *NeuLayer {
@@ -666,4 +697,38 @@ func (layer *NeuLayer) weightij_Rprop(i int, j int) float64 {
 	}
 
 	return weightij
+}
+
+//============================================================
+//
+// NN misc
+//
+//============================================================
+// given an index of the output coord [0, nn.getOsize())
+// compute sign vector for the dY(i)/dX(j)
+// for all j in the range [0, nn.getIsize())
+//
+// return true if at least of the partial derivatves is non-zero
+func (nn *NeuNetwork) realGradSign(ygsign []float64, yidx int, xvec []float64) (nonzero bool) {
+	const eps = GRADCHECK_eps
+	const eps2 = eps * 2
+	for j := 0; j < nn.getIsize(); j++ {
+		xj := xvec[j]
+		xvec[j] = xj + eps
+		yplus := nn.forward(xvec)[yidx]
+		xvec[j] = xj - eps
+		yminus := nn.forward(xvec)[yidx]
+		xvec[j] = xj
+		ygrad := (yplus - yminus) / eps2
+		if ygrad > eps2 {
+			ygsign[j] = 1
+			nonzero = true
+		} else if ygrad < -eps2 {
+			ygsign[j] = -1
+			nonzero = true
+		} else {
+			ygsign[j] = 0
+		}
+	}
+	return
 }

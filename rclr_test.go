@@ -123,7 +123,7 @@ func Test_rcluster(t *testing.T) {
 			for i, initiator := range ivec {
 				scLat[i] = float64(initiator.scoreLat) / float64(rclr.coperiod*rclr.ni)
 				scSel[i] = float64(initiator.scoreSel) / float64(rclr.coperiod)
-				scCost[i] = initiator.r.getCost()
+				scCost[i] = initiator.r.getCost(false)
 				initiator.scoreLat, initiator.scoreSel = 0, 0
 			}
 			fmt.Printf("%3d: %.3f - score min latency\n", rclr.p.step/rclr.coperiod, scLat)

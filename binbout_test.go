@@ -77,7 +77,7 @@ func nnCnbits() *NeuNetwork {
 }
 
 func xornbits(t *testing.T, nn *NeuNetwork) {
-	osize := nn.getCoutput().size
+	osize := nn.getOsize()
 	_xornbits := func(xvec []float64) []float64 {
 		var y = make([]float64, osize)
 		for i := 0; i < osize; i++ {

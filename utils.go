@@ -294,9 +294,24 @@ func newVector(size int, args ...interface{}) []float64 {
 	return v
 }
 
-func fillVectorSpecial(dst []float64, mean []float64, sign []float64, sigma float64, newrand *rand.Rand) {
+func fillVectorSpecial(dst []float64, mean []float64, newrand *rand.Rand, maxstd float64) {
 	for i := 0; i < len(dst); i++ {
-		mean := mean[i] + sigma*sign[i]/2
+		sigma := fmin(1-mean[i], mean[i]) / 2
+		sigma = fmin(sigma, maxstd)
+		dst[i] = newrand.NormFloat64()*sigma + mean[i]
+		if dst[i] <= 0 {
+			dst[i] = DEFAULT_eps
+		} else if dst[i] >= 1 {
+			dst[i] = 1 - DEFAULT_eps
+		}
+	}
+}
+func fillVectorSign(dst []float64, mean []float64, newrand *rand.Rand, maxstd float64, sign []float64) {
+	for i := 0; i < len(dst); i++ {
+		mean := mean[i] + sign[i]*0.01
+		sigma := fmin(1-mean, mean) / 2
+		sigma = fmin(sigma, maxstd)
+
 		dst[i] = newrand.NormFloat64()*sigma + mean
 		if dst[i] <= 0 {
 			dst[i] = sigma / 100
@@ -411,6 +426,12 @@ func max(a int, b int) int {
 	}
 	return b
 }
+func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 func fmax(a float64, b float64) float64 {
 	if a > b {
 		return a
@@ -418,10 +439,10 @@ func fmax(a float64, b float64) float64 {
 	return b
 }
 func fmin(a float64, b float64) float64 {
-	if a > b {
-		return b
+	if a < b {
+		return a
 	}
-	return a
+	return b
 }
 
 func pow2(a float64) float64 {

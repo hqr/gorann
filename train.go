@@ -55,7 +55,7 @@ func NewTreamWin(size int, nn NeuNetworkInterface) *TreamWin {
 	assert((size/b)*b == size)
 
 	Xs := newMatrix(size, nn.getIsize())
-	Ys := newMatrix(size, nn.getCoutput().size)
+	Ys := newMatrix(size, nn.getOsize())
 	return &TreamWin{Xs: Xs, Ys: Ys}
 }
 func (trwin *TreamWin) getXvec(i int) []float64 {

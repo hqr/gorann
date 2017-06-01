@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"sort"
 	"testing"
 )
 
@@ -83,8 +82,8 @@ var hart6_opt = []float64{0.20169, 0.150011, 0.476874, 0.275332, 0.311652, 0.657
 
 var hart6_newrand *rand.Rand
 
-func fn_hartmann(xvec []float64) (yvec []float64) {
-	yvec = []float64{0}
+func fn_hartmann(xvec []float64) []float64 {
+	yvec := []float64{0}
 	for i := 0; i < 4; i++ {
 		sum := 0.0
 		for j := 0; j < 6; j++ {
@@ -94,276 +93,219 @@ func fn_hartmann(xvec []float64) (yvec []float64) {
 		yvec[0] -= hart6_mC[i] * math.Exp(sum)
 	}
 	yvec[0] /= -3.33 // NOTE: normalize into (0, 1)
-	return
+	return yvec
 }
 
 //=====================================================================
 //
-// Looking for maximum(fn_hartmann) - in PARALLEL
-// -----------------   EXPERIMENTAL  ------------------------
+// Parallel compute: max(fn_hartmann) by multiple NN runners (experimental)
 //
 //=====================================================================
 type hart6_NN struct {
 	NeuNetworkInterface
+	// sticks
 	xmax []float64
-	xsgn []float64
-	xprv []float64
 	ymax float64
-	yprv float64
-	cost float64
-	cprv float64
 }
 
-type ByYmax []*NeuRunner
-
-func (rvec ByYmax) Len() int      { return len(rvec) }
-func (rvec ByYmax) Swap(i, j int) { rvec[i], rvec[j] = rvec[j], rvec[i] }
-func (rvec ByYmax) Less(i, j int) bool {
-	h_nn_i := rvec[i].nnint.(*hart6_NN)
-	h_nn_j := rvec[j].nnint.(*hart6_NN)
-	return h_nn_i.ymax < h_nn_j.ymax
-}
-
-var rrvec []*NeuRunner
-
-func (h_nn *hart6_NN) TrainStep(xvec []float64, yvec []float64) {
-	h_nn.forward(xvec)
-	if yvec[0] > h_nn.ymax {
-		copyVector(h_nn.xmax, xvec)
-		h_nn.ymax = yvec[0]
-		h_nn.cost = h_nn.costfunction(yvec)
-	}
-	ynorm := h_nn.normalizeY(yvec)
-	h_nn.computeDeltas(ynorm)
-	h_nn.backpropDeltas()
-	h_nn.backpropGradients()
-}
-
-func Test_hart6_1(t *testing.T) {
+func Test_hartmann_max(t *testing.T) {
+	// config: NN layers
 	input := NeuLayerConfig{size: 6}
 	hidden := NeuLayerConfig{"tanh", input.size * 5}
-	output := NeuLayerConfig{"sigmoid", 1}
+	output := NeuLayerConfig{"identity", 1}
 
-	xvec := newVector(input.size)
-
-	p := NewNeuParallel(1000)
-	pnum := 6
-	rrvec := make([]*NeuRunner, pnum)
-	ttp := &TTP{maxbackprops: 1E6}
-
-	for i := 1; i <= pnum; i++ {
-		// NN
-		tu := &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: XavierNewRand}
-		nn := NewNeuNetwork(input, hidden, 3, output, tu)
-		nn.layers[1].config.actfname = "relu"
-		// hart6_NN
-		h_nn := &hart6_NN{NeuNetworkInterface: nn, xmax: newVector(input.size), xsgn: newVector(input.size), xprv: newVector(input.size)}
-
-		r := p.attach(h_nn, i, true, ttp)
-		h_nn.initXavier(r.newrand)
-
-		rrvec[i-1] = r
+	// config: hyper-params
+	pnum := 5 // num NN runners (goroutines)
+	if cli.int1 != 0 {
+		pnum = cli.int1
 	}
+	sparse := 10 //
+	if cli.int2 != 0 {
+		sparse = cli.int2
+	}
+	gradstep := 0.001 //
+	sigma := 0.01
+	gradsmin := 2      //
+	gradsmax := 10     //
+	period := 1000     // logging period
+	numevals := 0      // <= maxevals (the budget)
+	trainevals := 1000 //
+	if cli.int3 != 0 {
+		trainevals = cli.int3
+	}
+	maxevals := 5000 //
+	if cli.int4 != 0 {
+		maxevals = cli.int4
+	}
+	var pd, ed, cnt1, cnt2 int
 
-	p.start() // go
-	ppnum := 0
-	eps := 0.001
-	for {
-		// 1. swap prev if better
-		for k := 1; k <= pnum; k++ {
-			r := p.get(k)
-			h_nn := r.nnint.(*hart6_NN)
-			yp := fn_hartmann(h_nn.xprv)
-			h_nn.yprv = yp[0]
-			y := fn_hartmann(h_nn.xmax)
-			h_nn.ymax = y[0]
-			if yp[0] > y[0] {
-				h_nn.ymax, h_nn.yprv = h_nn.yprv, h_nn.ymax
-				copyVector(xvec, h_nn.xmax)
-				copyVector(h_nn.xmax, h_nn.xprv)
-				copyVector(h_nn.xprv, xvec)
-			}
+	// local & tmp
+	xvec := newVector(input.size)
+	yvec := []float64{0}
+	xmax := newVector(input.size)
+	ymax := []float64{-1.0}
+	xinc := newVector(input.size)
+	wvec := newVector(pnum)
+
+	// parallel
+	psize := trainevals / pnum
+	psize = psize / 10 * 10
+	fmt.Printf("pnum=%d, psize=%d, sparse=%d, evals=%d\n", pnum, psize, sparse, maxevals)
+	p := NewNeuParallel(psize)
+
+	// inner funcs
+	fn_hartmann_max := func(xvec []float64) float64 {
+		y := fn_hartmann(xvec)[0]
+		if y > ymax[0] {
+			ymax[0] = y
+			copyVector(xmax, xvec)
 		}
-
-		// 2. sort
-		sort.Sort(ByYmax(rrvec))
-		// 3. sign
-		for k := 1; k <= pnum; k++ {
-			r := p.get(k)
-			h_nn := r.nnint.(*hart6_NN)
-			for j := 0; j < input.size; j++ {
-				copyVector(xvec, h_nn.xmax)
-				h_nn.xsgn[j] = 0
-				y0 := fn_hartmann(xvec)
-				xvec[j] += eps
-				y1 := fn_hartmann(xvec)
-				xvec[j] -= eps * 2
-				y2 := fn_hartmann(xvec)
-				if y1[0] > y0[0]+eps/10 && y1[0] > y2[0] {
-					h_nn.xsgn[j] = 1
-				} else if y2[0] > y0[0]+eps/10 && y2[0] > y1[0] {
-					h_nn.xsgn[j] = -1
+		numevals++
+		return y
+	}
+	fn_gradstep := func(xvec []float64, h_nn *hart6_NN, dx float64) bool {
+		nn := h_nn.NeuNetworkInterface.(*NeuNetwork)
+		nonzero := nn.realGradSign(xinc, 0, xvec)
+		if nonzero {
+			mulVectorNum(xinc, dx)
+			addVectorElem(xvec, xinc)
+			for j := 0; j < h_nn.getIsize(); j++ {
+				if xvec[j] < 0 || xvec[j] > 1 {
+					return false
 				}
 			}
 		}
-		// 4. fill-in
-		for k := 1; k <= pnum; k++ {
-			r := p.get(k)
-			i := 0
-			// 3.1. 30% - random (0, 1)
-			for ; i < p.size/3; i++ {
-				fillVector(xvec, 0.0, 1.0)
-				yvec := fn_hartmann(xvec)
-				r.addSample(xvec, yvec)
-			}
-			// 3.2. based on sorted confidence
-			for kk := ppnum - 1; kk >= 0; kk-- {
-				rr := rrvec[kk]
-				h_nn := rr.nnint.(*hart6_NN)
-				fillsz := p.size / 35 * (kk + 1)
-				std := 0.1
-				for ii := 0; ii < fillsz && i < p.size; ii++ {
-					fillVectorSpecial(xvec, h_nn.xmax, h_nn.xsgn, std, r.newrand)
-					yvec := fn_hartmann(xvec)
-					r.addSample(xvec, yvec)
-					i++
-				}
-			}
-			// 3.3. remaining if any - random (0, 1)
-			for ; i < p.size; i++ {
-				fillVector(xvec, 0.0, 1.0)
-				yvec := fn_hartmann(xvec)
-				r.addSample(xvec, yvec)
-			}
-		}
-		// 5. store prev
-		for k := 1; k <= pnum; k++ {
-			r := p.get(k)
-			h_nn := r.nnint.(*hart6_NN)
-			h_nn.yprv = h_nn.ymax
-			copyVector(h_nn.xprv, h_nn.xmax)
-		}
-
-		// 5. compute
-		p.compute()
-
-		ppnum = pnum
-		// 6. log
-		if p.step%100 == 0 {
-			for k := 1; k <= pnum; k++ {
-				r := p.get(k)
-				h_nn := r.nnint.(*hart6_NN)
-				xvec[k-1] = math.Sqrt(normL2DistanceSquared(h_nn.xmax, hart6_opt))
-			}
-			fmt.Printf("distances: %.4f\n", xvec)
-			for k := 1; k <= pnum; k++ {
-				r := p.get(k)
-				h_nn := r.nnint.(*hart6_NN)
-				xvec[k-1] = fn_hartmann(h_nn.xmax)[0]
-			}
-			fmt.Printf("ymax     : %.4f\n", xvec)
-		}
+		return nonzero
 	}
-}
 
-func Test_hart6_2(t *testing.T) {
-	input := NeuLayerConfig{size: 6}
-	hidden := NeuLayerConfig{"tanh", input.size * 5}
-	output := NeuLayerConfig{"sigmoid", 1}
-
-	xvec := newVector(input.size)
-
-	p := NewNeuParallel(1000)
-	pnum := 6
-	rrvec := make([]*NeuRunner, pnum)
-	ttp := &TTP{maxbackprops: 1E6}
-
+	// construct NN runners
+	ttp := &TTP{maxbackprops: 1E6, sequential: true, num: 10}
 	for i := 1; i <= pnum; i++ {
 		// NN
-		tu := &NeuTunables{gdalgname: RMSprop, batchsize: 10, winit: XavierNewRand}
+		tu := &NeuTunables{gdalgname: ADAM, batchsize: 10, winit: XavierNewRand}
+		// diversify
+		if i%3 == 1 {
+			tu.gdalgname = RMSprop
+		} else if i%3 == 2 {
+			tu.gdalgname = Rprop
+		}
 		nn := NewNeuNetwork(input, hidden, 3, output, tu)
 		nn.layers[1].config.actfname = "relu"
+
 		// hart6_NN
-		h_nn := &hart6_NN{NeuNetworkInterface: nn, xmax: newVector(input.size), xsgn: newVector(input.size), xprv: newVector(input.size)}
-
+		h_nn := &hart6_NN{NeuNetworkInterface: nn, xmax: newVector(input.size)}
+		// runner
 		r := p.attach(h_nn, i, true, ttp)
-		h_nn.initXavier(r.newrand)
-
-		rrvec[i-1] = r
+		nn.initXavierSparse(r.newrand, sparse) // diversify
 	}
 
-	p.start() // go
-	std := 0.1
-	// first time
+	// go parallel
+	p.start()
+	defer p.stop()
+
+	// pretrain #1: random
 	for k := 1; k <= pnum; k++ {
 		r := p.get(k)
+		h_nn := r.nnint.(*hart6_NN)
 		for i := 0; i < p.size; i++ {
 			fillVector(xvec, 0.0, 1.0)
-			yvec := fn_hartmann(xvec)
+			yvec[0] = fn_hartmann_max(xvec)
 			r.addSample(xvec, yvec)
+			if yvec[0] > h_nn.ymax {
+				h_nn.ymax = yvec[0]
+				copyVector(h_nn.xmax, xvec)
+			}
 		}
 	}
 	p.compute()
 
-	for {
-		// 1. max
-		var ymax = []float64{-1.0}
-		for k := 1; k <= pnum; k++ {
-			r := p.get(k)
-			h_nn := r.nnint.(*hart6_NN)
-			y := fn_hartmann(h_nn.xmax)
-			if y[0] > ymax[0] {
-				ymax[0] = y[0]
-				copyVector(xvec, h_nn.xmax)
-			}
-		}
-		for k := 1; k <= pnum; k++ {
-			r := p.get(k)
-			h_nn := r.nnint.(*hart6_NN)
-			copyVector(h_nn.xmax, xvec)
-		}
+	// pretrain #2: rotate
+	for rotate := 1; rotate <= pnum-1; rotate++ {
+		p.rotate()
+		p.compute()
+	}
+	q := math.Sqrt(normL2DistanceSquared(xmax, hart6_opt))
+	fmt.Printf("ymax=%.5f, d=%.4f, numevals=%d\n", ymax[0], q, numevals)
+	for k := 1; k <= pnum; k++ {
+		r := p.get(k)
+		h_nn := r.nnint.(*hart6_NN)
+		wvec[k-1] = h_nn.ymax
+	}
+	fmt.Printf("%.5f\n", wvec)
 
-		// 4. fill-in
-		for k := 1; k <= pnum; k++ {
+	// main loop
+	ed = numevals / trainevals
+	for keepgoing := true; keepgoing && numevals <= maxevals; {
+		for k := 1; k <= pnum && numevals <= maxevals; k++ {
 			r := p.get(k)
 			h_nn := r.nnint.(*hart6_NN)
-			i := 0
-			for ; i < p.size/3; i++ {
-				if i == 0 {
-					r.addSample(h_nn.xmax, ymax)
-				} else {
-					fillVectorSpecial(xvec, h_nn.xmax, h_nn.xsgn, std, r.newrand)
-					yvec := fn_hartmann(xvec)
+
+			for kk := 1; kk <= pnum && numevals <= maxevals; kk++ {
+				if kk == k {
+					continue
+				}
+				other_r := p.get(kk)
+				other_nn := other_r.nnint.(*hart6_NN)
+
+				copyVector(xvec, other_nn.xmax)
+				for i := 0; i < gradsmax && numevals <= maxevals; i++ {
+					if !fn_gradstep(xvec, h_nn, gradstep) {
+						break
+					}
+					yvec[0] = fn_hartmann_max(xvec)
+					r.addSample(xvec, yvec)
+					if yvec[0] > other_nn.ymax {
+						other_nn.ymax = yvec[0]
+						copyVector(other_nn.xmax, xvec)
+						cnt1++
+					} else if i > gradsmin {
+						break
+					}
+				}
+
+				// gaussian(other xmax)
+				for i := 0; i < 10 && numevals <= maxevals; i++ {
+					y := other_nn.ymax
+					fillVectorSpecial(xvec, other_nn.xmax, r.newrand, sigma)
+					yvec[0] = fn_hartmann_max(xvec)
+					if y < yvec[0] {
+						copyVector(other_nn.xmax, xvec)
+						other_nn.ymax = yvec[0]
+						cnt2++
+					}
 					r.addSample(xvec, yvec)
 				}
 			}
-			for ; i < p.size; i++ {
-				fillVector(xvec, 0.0, 1.0)
-				yvec := fn_hartmann(xvec)
-				r.addSample(xvec, yvec)
-			}
 
+			// reuse (rotate)
+			if numevals/trainevals != ed {
+				ed = numevals / trainevals
+				for rotate := 1; rotate <= pnum-1; rotate++ {
+					p.rotate()
+					p.compute()
+				}
+			}
+			// log
+			if numevals/period != pd {
+				pd = numevals / period
+
+				q := math.Sqrt(normL2DistanceSquared(xmax, hart6_opt))
+				fmt.Printf("ymax=%.5f, d=%.4f, numevals=%d\n", ymax[0], q, numevals)
+				for k := 1; k <= pnum; k++ {
+					r := p.get(k)
+					h_nn := r.nnint.(*hart6_NN)
+					wvec[k-1] = h_nn.ymax
+				}
+				fmt.Printf("%.5f\n", wvec)
+				fmt.Printf("cnt1=%d, cnt2=%d\n", cnt1, cnt2)
+				if cnt1+cnt2 == 0 {
+					break
+				}
+				cnt1, cnt2 = 0, 0
+			}
 		}
 
-		// 5. compute
-		p.compute()
-
-		// 6. log
-		if p.step%100 == 0 {
-			for k := 1; k <= pnum; k++ {
-				r := p.get(k)
-				h_nn := r.nnint.(*hart6_NN)
-				xvec[k-1] = math.Sqrt(normL2DistanceSquared(h_nn.xmax, hart6_opt))
-			}
-			fmt.Printf("distances: %.4f\n", xvec)
-			for k := 1; k <= pnum; k++ {
-				r := p.get(k)
-				h_nn := r.nnint.(*hart6_NN)
-				xvec[k-1] = fn_hartmann(h_nn.xmax)[0]
-			}
-			fmt.Printf("ymax     : %.4f\n", xvec)
-		}
+		// 2. compute
+		keepgoing = p.compute()
 	}
 }
-
-//
