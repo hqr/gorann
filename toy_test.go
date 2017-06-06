@@ -125,15 +125,15 @@ func Test_hartmann_max(t *testing.T) {
 	}
 	gradstep := 0.001 //
 	sigma := 0.01
-	gradsmin := 2      //
-	gradsmax := 10     //
-	period := 1000     // logging period
-	numevals := 0      // <= maxevals (the budget)
-	trainevals := 1000 //
+	gradsmin := 2     //
+	gradsmax := 10    //
+	period := 100     // logging period
+	numevals := 0     // <= maxevals (the budget)
+	trainevals := 300 //
 	if cli.int3 != 0 {
 		trainevals = cli.int3
 	}
-	maxevals := 5000 //
+	maxevals := 2300 //
 	if cli.int4 != 0 {
 		maxevals = cli.int4
 	}
@@ -145,15 +145,15 @@ func Test_hartmann_max(t *testing.T) {
 	xmax := newVector(input.size)
 	ymax := []float64{-1.0}
 	xinc := newVector(input.size)
-	wvec := newVector(pnum)
 
 	// parallel
 	psize := trainevals / pnum
 	psize = psize / 10 * 10
-	fmt.Printf("pnum=%d, psize=%d, sparse=%d, evals=%d\n", pnum, psize, sparse, maxevals)
+	//fmt.Printf("pnum=%d, psize=%d, sparse=%d, evals=%d\n", pnum, psize, sparse, maxevals)
+	str := fmt.Sprintf("%2d, ", pnum)
 	p := NewNeuParallel(psize)
 
-	// inner funcs
+	// inner functions
 	fn_hartmann_max := func(xvec []float64) float64 {
 		y := fn_hartmann(xvec)[0]
 		if y > ymax[0] {
@@ -161,6 +161,14 @@ func Test_hartmann_max(t *testing.T) {
 			copyVector(xmax, xvec)
 		}
 		numevals++
+		// log
+		if numevals/period != pd {
+			pd = numevals / period
+
+			q := math.Sqrt(normL2DistanceSquared(xmax, hart6_opt))
+			str += fmt.Sprintf("%.3f, ", q)
+			cnt1, cnt2 = 0, 0
+		}
 		return y
 	}
 	fn_gradstep := func(xvec []float64, h_nn *hart6_NN, dx float64) bool {
@@ -179,7 +187,7 @@ func Test_hartmann_max(t *testing.T) {
 	}
 
 	// construct NN runners
-	ttp := &TTP{maxbackprops: 1E6, sequential: true, num: 10}
+	ttp := &TTP{sequential: true, num: 10}
 	for i := 1; i <= pnum; i++ {
 		// NN
 		tu := &NeuTunables{gdalgname: ADAM, batchsize: 10, winit: XavierNewRand}
@@ -224,14 +232,6 @@ func Test_hartmann_max(t *testing.T) {
 		p.rotate()
 		p.compute()
 	}
-	q := math.Sqrt(normL2DistanceSquared(xmax, hart6_opt))
-	fmt.Printf("ymax=%.5f, d=%.4f, numevals=%d\n", ymax[0], q, numevals)
-	for k := 1; k <= pnum; k++ {
-		r := p.get(k)
-		h_nn := r.nnint.(*hart6_NN)
-		wvec[k-1] = h_nn.ymax
-	}
-	fmt.Printf("%.5f\n", wvec)
 
 	// main loop
 	ed = numevals / trainevals
@@ -241,9 +241,6 @@ func Test_hartmann_max(t *testing.T) {
 			h_nn := r.nnint.(*hart6_NN)
 
 			for kk := 1; kk <= pnum && numevals <= maxevals; kk++ {
-				if kk == k {
-					continue
-				}
 				other_r := p.get(kk)
 				other_nn := other_r.nnint.(*hart6_NN)
 
@@ -285,27 +282,10 @@ func Test_hartmann_max(t *testing.T) {
 					p.compute()
 				}
 			}
-			// log
-			if numevals/period != pd {
-				pd = numevals / period
-
-				q := math.Sqrt(normL2DistanceSquared(xmax, hart6_opt))
-				fmt.Printf("ymax=%.5f, d=%.4f, numevals=%d\n", ymax[0], q, numevals)
-				for k := 1; k <= pnum; k++ {
-					r := p.get(k)
-					h_nn := r.nnint.(*hart6_NN)
-					wvec[k-1] = h_nn.ymax
-				}
-				fmt.Printf("%.5f\n", wvec)
-				fmt.Printf("cnt1=%d, cnt2=%d\n", cnt1, cnt2)
-				if cnt1+cnt2 == 0 {
-					break
-				}
-				cnt1, cnt2 = 0, 0
-			}
 		}
 
 		// 2. compute
 		keepgoing = p.compute()
 	}
+	p.logger.Print(str[:len(str)-2])
 }
