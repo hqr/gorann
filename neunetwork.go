@@ -233,8 +233,6 @@ func (layer *NeuLayer) winit(tunables *NeuTunables) {
 			}
 		}
 	}
-
-	// Xavier et al at http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
 }
 
 // Xavier et al at http://jmlr.org/proceedings/papers/v9/glorot10a/glorot10a.pdf
@@ -257,8 +255,7 @@ func (nn *NeuNetwork) initXavier(newrand *rand.Rand) {
 	}
 }
 
-func (nn *NeuNetwork) initXavierSparse(newrand *rand.Rand, pct int) {
-	qsix := math.Sqrt(6)
+func (nn *NeuNetwork) sparsify(newrand *rand.Rand, pct int) {
 	numweights := 0
 	for l := 1; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
@@ -269,23 +266,17 @@ func (nn *NeuNetwork) initXavierSparse(newrand *rand.Rand, pct int) {
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		next := layer.next
-		u := qsix / float64(layer.size+next.size)
-		d := u * 2
 		for i := 0; i < layer.size; i++ {
 			for j := 0; j < next.size; j++ {
 				if newrand == nil {
 					k := rand.Intn(numweights)
 					if k < wm {
 						layer.weights[i][j] = 0
-					} else {
-						layer.weights[i][j] = d*rand.Float64() - u
 					}
 				} else {
 					k := newrand.Intn(numweights)
 					if k < wm {
 						layer.weights[i][j] = 0
-					} else {
-						layer.weights[i][j] = d*newrand.Float64() - u
 					}
 				}
 			}
@@ -318,15 +309,30 @@ func (nn *NeuNetwork) reset() {
 	}
 }
 
-func (nn *NeuNetwork) copyNetwork(from *NeuNetwork) {
+func (nn *NeuNetwork) copyNetwork(from *NeuNetwork, withgrads bool) {
 	assert(nn.lastidx == from.lastidx)
 	copyStruct(nn.tunables, from.tunables)
 	for l := 0; l < nn.lastidx; l++ {
 		layer := nn.layers[l]
 		layer_from := from.layers[l]
-		assert(layer.config.size == layer_from.config.size)
-
+		assert(layer.size == layer_from.size)
+		assert(layer.next.size == layer_from.next.size)
 		copyMatrix(layer.weights, layer_from.weights)
+
+		if withgrads {
+			copyMatrix(layer.gradient, layer_from.gradient)
+			copyMatrix(layer.pregradient, layer_from.pregradient)
+			copyMatrix(layer.rmsgradient, layer_from.rmsgradient)
+			if layer.avegradient != nil {
+				copyMatrix(layer.avegradient, layer_from.avegradient)
+			}
+			if layer.rmswupdates != nil {
+				copyMatrix(layer.rmswupdates, layer_from.rmswupdates)
+			}
+			if layer.wupdates != nil {
+				copyMatrix(layer.wupdates, layer_from.wupdates)
+			}
+		}
 	}
 }
 

@@ -204,7 +204,8 @@ func Test_hartmann_max(t *testing.T) {
 		h_nn := &hart6_NN{NeuNetworkInterface: nn, xmax: newVector(input.size)}
 		// runner
 		r := p.attach(h_nn, i, true, ttp)
-		nn.initXavierSparse(r.newrand, sparse) // diversify
+		nn.initXavier(r.newrand) // diversify
+		nn.sparsify(r.newrand, sparse)
 	}
 
 	// go parallel

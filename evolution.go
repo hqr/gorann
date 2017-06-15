@@ -43,7 +43,7 @@ func NewEvolution(
 
 	nn := NewNeuNetwork(cinput, chidden, numhidden, coutput, &tunables.NeuTunables)
 	nn_cpy := NewNeuNetwork(cinput, chidden, numhidden, coutput, &NeuTunables{})
-	nn_cpy.copyNetwork(nn)
+	nn_cpy.copyNetwork(nn, false)
 	gnoise := make([][][][]float64, numhidden+1)
 	for l := 0; l < numhidden+1; l++ {
 		gnoise[l] = make([][][]float64, tunables.nperturb*2)

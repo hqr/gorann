@@ -215,6 +215,10 @@ func (r *NeuRunner) computeStream() {
 		r.nnint.fixGradients(b)
 		r.nnint.fixWeights(b)
 		r.fixed = r.trained
+
+		if r.ttp.maxbackprops > 0 && r.ttp.nn.getNbprops() >= r.ttp.maxbackprops {
+			r.stopped = true
+		}
 	}
 }
 
