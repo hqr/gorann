@@ -67,7 +67,7 @@ type RCLR struct {
 func init() {
 	rclr = &RCLR{
 		nil,
-		2.9,      // service rate: num requests target handles in one epoch
+		2.1,      // service rate: num requests target handles in one epoch
 		int(1E5), // max steps (100 * period)
 		1000,     // num pretrain steps (1 period)
 		1000,     // period: scoring/logging
@@ -234,8 +234,9 @@ func Test_rcluster(t *testing.T) {
 		}
 	}
 	//
-	// Phase III. Printout: group-by initiator.tag
+	// Phase III. Reports
 	//
+	rclr.p.logger.Printf("\n* Latency *\n")
 	for _, it := range itags {
 		for i, initiator := range ivec {
 			if it != tag_I(i, ii, jj, itags) {
@@ -246,17 +247,29 @@ func Test_rcluster(t *testing.T) {
 			rclr.p.logger.Printf("%-2d %s %s", i, stag, strings.Trim(ssma, "[]"))
 		}
 	}
-	rclr.p.logger.Printf("\n       avg   std\n")
+	rclr.p.logger.Printf("\n* Average Latency, by Initiator *\n")
+	rclr.p.logger.Printf("   tg  avg   std\n")
+	ig := make(map[string]float64, len(itags))
 	for _, it := range itags {
+		count := 0
 		for i, initiator := range ivec {
 			if it != tag_I(i, ii, jj, itags) {
 				continue
 			}
 			mean, std := meanStdVector(initiator.smavec)
+			ig[it] += mean
+			count++
 			stag := fmt.Sprintf("%-2s", it)
 			rclr.p.logger.Printf("%-2d %s %.3f %.3f\n", i, stag, mean, std)
 		}
+		ig[it] /= float64(count)
 	}
+	rclr.p.logger.Printf("\n* Average Latency, by Initiator Group *\n")
+	for _, it := range itags {
+		stag := fmt.Sprintf("%-2s", it)
+		rclr.p.logger.Printf("%s %.3f\n", stag, ig[it])
+	}
+	rclr.p.logger.Printf("\n")
 }
 
 var lastpct int
@@ -316,7 +329,7 @@ func construct_I() {
 		nn := NewNeuNetwork(input, hidden, 2, output, tu)
 		nn.sparsify(nil, rclr.sparse)
 		nn.layers[1].config.actfname = "relu"
-		const d = 10.0
+		const d = 100.0
 		normalize := func(vec []float64) {
 			vec[0] /= d
 			assert(vec[0] < 1.0, fmt.Sprintf("normalize %f", vec[0]))
